@@ -205,6 +205,10 @@ const char* Thread::normalizeThreadName(const char* threadName)
 
 void Thread::initializeInThread()
 {
+#if OS(VITA)
+    // Publish the owning native thread ID before exposing this thread to groups.
+    m_id = currentID();
+#endif
     if (m_stack.isEmpty())
         m_stack = StackBounds::currentThreadStackBounds();
     m_savedLastStackTop = stack().origin();

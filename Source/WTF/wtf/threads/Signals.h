@@ -123,7 +123,7 @@ struct SignalHandlers {
     std::array<uint8_t, numberOfSignals> numberOfHandlers;
     std::array<std::array<SignalHandlerMemory, maxNumberOfHandlers>, numberOfSignals> handlers;
 
-#if OS(UNIX)
+#if OS(UNIX) && !OS(VITA)
     std::array<struct sigaction, numberOfSignals> oldActions;
 #endif
 };

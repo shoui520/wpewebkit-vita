@@ -41,6 +41,7 @@ else ()
     if (WTF_OS_VITA)
         list(APPEND WTF_SOURCES
             vita/CPUTimeVita.cpp
+            vita/SignalsVita.cpp
         )
     elseif (WTF_OS_FUCHSIA)
         list(APPEND WTF_SOURCES

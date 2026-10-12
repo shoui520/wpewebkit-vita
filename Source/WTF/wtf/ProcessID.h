@@ -33,6 +33,8 @@
 
 #if OS(WINDOWS)
 #include <windows.h>
+#elif OS(VITA)
+#include <psp2/kernel/threadmgr/thread.h>
 #endif
 
 namespace WTF {
@@ -47,6 +49,8 @@ inline ProcessID getCurrentProcessID()
 {
 #if OS(WINDOWS)
     return GetCurrentProcessId();
+#elif OS(VITA)
+    return sceKernelGetProcessId();
 #else
     return getpid();
 #endif

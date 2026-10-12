@@ -207,7 +207,7 @@ public:
     WTF_EXPORT_PRIVATE size_t getRegisters(const ThreadSuspendLocker&, PlatformRegisters&);
 
 #if USE(PTHREADS)
-#if OS(LINUX)
+#if OS(LINUX) || OS(VITA)
     WTF_EXPORT_PRIVATE static ThreadIdentifier currentID();
     ThreadIdentifier id() const { return m_id; }
 #endif
@@ -404,10 +404,12 @@ protected:
 #elif OS(DARWIN)
     mach_port_t m_platformThread { MACH_PORT_NULL };
 #elif USE(PTHREADS)
-#if OS(LINUX)
+#if OS(LINUX) || OS(VITA)
     ThreadIdentifier m_id { 0 };
 #endif
+#if !OS(VITA)
     PlatformRegisters* m_platformRegisters { nullptr };
+#endif
     unsigned m_suspendCount { 0 };
 #endif
 

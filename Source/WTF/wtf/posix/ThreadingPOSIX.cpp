@@ -43,6 +43,13 @@
 #include <wtf/WTFConfig.h>
 #include <wtf/WordLock.h>
 
+#if OS(VITA)
+#include <psp2/kernel/threadmgr/thread.h>
+extern "C" int sceKernelSuspendThreadForVM(SceUID);
+extern "C" int sceKernelResumeThreadForVM(SceUID);
+extern "C" int sceKernelGetThreadContextForVM(SceUID, WTF::VitaCPUContext*, WTF::VitaFPUContext*);
+#endif
+
 #if OS(HAIKU)
 #include <OS.h>
 #endif
@@ -83,7 +90,7 @@ namespace WTF {
 
 Thread::~Thread() = default;
 
-#if !OS(DARWIN)
+#if !OS(DARWIN) && !OS(VITA)
 class Semaphore final {
     WTF_MAKE_NONCOPYABLE(Semaphore);
     WTF_DEPRECATED_MAKE_FAST_ALLOCATED(Semaphore);
@@ -174,10 +181,11 @@ void Thread::signalHandlerSuspendResume(int, siginfo_t*, void* ucontext)
     globalSemaphoreForSuspendResume->post();
 }
 
-#endif // !OS(DARWIN)
+#endif // !OS(DARWIN) && !OS(VITA)
 
 void Thread::initializePlatformThreading()
 {
+#if !OS(VITA)
     if (!g_wtfConfig.isUserSpecifiedThreadSuspendResumeSignalConfigured) {
         g_wtfConfig.sigThreadSuspendResume = SIGUSR1;
         if (const char* string = getenv("JSC_SIGNAL_FOR_GC")) {
@@ -220,6 +228,7 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     bool signalIsInstalled = attemptToSetSignal(g_wtfConfig.sigThreadSuspendResume);
     RELEASE_ASSERT(signalIsInstalled);
 #endif
+#endif // !OS(VITA)
 }
 
 #if OS(LINUX)
@@ -229,9 +238,21 @@ ThreadIdentifier Thread::currentID()
 }
 #endif
 
+#if OS(VITA)
+ThreadIdentifier Thread::currentID()
+{
+    return sceKernelGetThreadId();
+}
+#endif
+
 void Thread::initializeCurrentThreadEvenIfNonWTFCreated()
 {
-#if !OS(DARWIN)
+#if OS(VITA)
+    SceKernelThreadInfo info { };
+    info.size = sizeof(info);
+    RELEASE_ASSERT(!sceKernelGetThreadInfo(sceKernelGetThreadId(), &info));
+    RELEASE_ASSERT_WITH_MESSAGE(info.attr & 0x04000000U, "Vita WTF threads require the VM attribute at creation for GC register capture.");
+#elif !OS(DARWIN)
     RELEASE_ASSERT(g_wtfConfig.isThreadSuspendResumeSignalConfigured);
     sigset_t mask;
     sigemptyset(&mask);
@@ -462,6 +483,12 @@ auto Thread::suspend(const ThreadSuspendLocker&) -> Expected<void, PlatformSuspe
     if (result != KERN_SUCCESS)
         return makeUnexpected(result);
     return { };
+#elif OS(VITA)
+    int result = sceKernelSuspendThreadForVM(m_id);
+    // GC callers may skip roots on a returned error. Fail closed on this port.
+    RELEASE_ASSERT_WITH_MESSAGE(result >= 0, "Vita VM thread suspension failed: 0x%x", result);
+    ++m_suspendCount;
+    return { };
 #else
     if (!m_suspendCount) {
         targetThread.store(this);
@@ -488,6 +515,11 @@ void Thread::resume(const ThreadSuspendLocker&)
 {
 #if OS(DARWIN)
     thread_resume(m_platformThread);
+#elif OS(VITA)
+    RELEASE_ASSERT(m_suspendCount);
+    int result = sceKernelResumeThreadForVM(m_id);
+    RELEASE_ASSERT_WITH_MESSAGE(result >= 0, "Vita VM thread resume failed: 0x%x", result);
+    --m_suspendCount;
 #else
     if (m_suspendCount == 1) {
         // When allowing sigThreadSuspendResume interrupt in the signal handler by sigsuspend and SigThreadSuspendResume is actually issued,
@@ -551,6 +583,15 @@ size_t Thread::getRegisters(const ThreadSuspendLocker&, PlatformRegisters& regis
         CRASH_WITH_INFO(result, KERN_SUCCESS);
     }
     return metadata.userCount * sizeof(uintptr_t);
+#elif OS(VITA)
+    RELEASE_ASSERT(m_suspendCount);
+    registers = { };
+    registers.cpu.size = sizeof(registers.cpu);
+    registers.fpu.size = sizeof(registers.fpu);
+    int result = sceKernelGetThreadContextForVM(m_id, &registers.cpu, &registers.fpu);
+    RELEASE_ASSERT_WITH_MESSAGE(!result, "Vita VM register capture failed: 0x%x", result);
+    RELEASE_ASSERT(m_stack.contains(reinterpret_cast<void*>(registers.cpu.r[13])));
+    return sizeof(registers);
 #else
     ASSERT_WITH_MESSAGE(m_suspendCount, "We can get registers only if the thread is suspended.");
     ASSERT(m_platformRegisters);

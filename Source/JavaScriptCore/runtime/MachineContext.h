@@ -27,12 +27,15 @@
 
 #pragma once
 
-#include "LLIntPCRanges.h"
-#include <JavaScriptCore/GPRInfo.h>
-#include <JavaScriptCore/MacroAssemblerCodeRef.h>
 #include <wtf/PlatformRegisters.h>
 #include <wtf/PointerPreparations.h>
 #include <wtf/StdLibExtras.h>
+
+#if OS(WINDOWS) || HAVE(MACHINE_CONTEXT)
+#include "LLIntPCRanges.h"
+#include <JavaScriptCore/GPRInfo.h>
+#include <JavaScriptCore/MacroAssemblerCodeRef.h>
+#endif
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 
@@ -136,7 +139,11 @@ inline T stackPointer(const PlatformRegisters& regs)
 template<typename T>
 inline T stackPointer(const PlatformRegisters& regs)
 {
+#if OS(VITA)
+    return std::bit_cast<T>(static_cast<uintptr_t>(regs.cpu.r[13]));
+#else
     return std::bit_cast<T>(regs.stackPointer);
+#endif
 }
 #endif // OS(WINDOWS) || HAVE(MACHINE_CONTEXT)
 

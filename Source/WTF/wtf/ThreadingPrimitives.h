@@ -59,6 +59,8 @@ using PlatformCondition = pthread_cond_t;
 using ThreadSpecificKey = pthread_key_t;
 #if OS(LINUX)
 using ThreadIdentifier = pid_t;
+#elif OS(VITA)
+using ThreadIdentifier = int32_t;
 #endif
 #elif OS(WINDOWS)
 using ThreadIdentifier = uint32_t;

@@ -72,6 +72,31 @@ inline PlatformRegisters& registersFromUContext(ucontext_t* ucontext)
 
 using PlatformRegisters = CONTEXT;
 
+#elif OS(VITA)
+
+struct VitaCPUContext {
+    uint32_t size;
+    uint32_t cpsr;
+    uint32_t r[16];
+    uint32_t extra[4];
+};
+
+struct alignas(8) VitaFPUContext {
+    uint32_t size;
+    uint32_t fpscr;
+    uint64_t d[32];
+};
+
+// Native VM contexts include all ARM and VFP registers that may contain GC roots.
+struct PlatformRegisters {
+    VitaCPUContext cpu;
+    VitaFPUContext fpu;
+};
+
+static_assert(sizeof(VitaCPUContext) == 0x58);
+static_assert(sizeof(VitaFPUContext) == 0x108);
+static_assert(sizeof(PlatformRegisters) == 0x160);
+
 #elif HAVE(MACHINE_CONTEXT)
 
 struct PlatformRegisters {

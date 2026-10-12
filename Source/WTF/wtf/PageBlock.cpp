@@ -39,7 +39,15 @@ namespace WTF {
 
 static size_t s_pageSize;
 
-#if OS(UNIX)
+#if OS(VITA)
+
+inline size_t systemPageSize()
+{
+    // Native USER_RW memblocks use 4 KiB pages; sysconf is runtime-dependent.
+    return 4 * KB;
+}
+
+#elif OS(UNIX)
 
 inline size_t systemPageSize()
 {

@@ -1,6 +1,8 @@
 find_package(Threads REQUIRED)
 
 if (VITA)
+    # vita-elf-create relocates static executables and rejects PIC GOT relocations.
+    set(CMAKE_POSITION_INDEPENDENT_CODE FALSE)
     # Match the POSIX feature visibility used by the configure checks.
     add_compile_definitions(_GNU_SOURCE=1)
     # libstdc++ probes pthread_cancel through a weak reference and calls other
@@ -85,6 +87,10 @@ if (VITA)
 endif ()
 
 WEBKIT_OPTION_END()
+
+if (VITA AND NOT ENABLE_STATIC_JSC)
+    message(FATAL_ERROR "Vita JavaScriptCore requires static libraries")
+endif ()
 
 set(ALL_EVENT_LOOP_TYPES
     GLib
