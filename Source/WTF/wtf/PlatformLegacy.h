@@ -52,6 +52,8 @@
 #define WTF_PLATFORM_HAIKU 1
 #elif defined(BUILDING_WPE__)
 #define WTF_PLATFORM_WPE 1
+#elif defined(BUILDING_VITA__)
+#define WTF_PLATFORM_VITA 1
 #elif defined(BUILDING_JSCONLY__)
 /* JSCOnly does not provide PLATFORM() macro */
 #elif OS(MACOS)
