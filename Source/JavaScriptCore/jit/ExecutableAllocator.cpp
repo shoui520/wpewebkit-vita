@@ -401,7 +401,12 @@ static ALWAYS_INLINE JITReservation initializeJITPageReservation()
 #endif
         if (Options::useJITCage() && JSC_ALLOW_JIT_CAGE_SPECIFIC_RESERVATION)
             return PageReservation::tryReserve(reservationSize, OSAllocator::JSJITCodePages, hintAddress, EXECUTABLE_POOL_WRITABLE, true, false, Options::useJITCage());
+#if OS(VITA)
+        // Vita uses a whole physically backed pool; guard-page splitting is unsupported.
+        return PageReservation::tryReserve(reservationSize, OSAllocator::JSJITCodePages, hintAddress, EXECUTABLE_POOL_WRITABLE, true, false, false);
+#else
         return PageReservation::tryReserveWithGuardPages(reservationSize, OSAllocator::JSJITCodePages, hintAddress, EXECUTABLE_POOL_WRITABLE, true, false, false);
+#endif
     };
 
     void* addressHint = reinterpret_cast<void*>(Options::jitMemoryReservationAddress());

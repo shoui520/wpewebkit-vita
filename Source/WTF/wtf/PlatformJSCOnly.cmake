@@ -30,7 +30,6 @@ else ()
     list(APPEND WTF_SOURCES
         generic/MainThreadGeneric.cpp
 
-        posix/OSAllocatorPOSIX.cpp
         posix/ThreadingPOSIX.cpp
 
         text/unix/TextBreakIteratorInternalICUUnix.cpp
@@ -47,6 +46,7 @@ else ()
         list(APPEND WTF_SOURCES
             vita/CodeCacheVita.cpp
             vita/CPUTimeVita.cpp
+            vita/OSAllocatorVita.cpp
             vita/SignalsVita.cpp
         )
     elseif (WTF_OS_FUCHSIA)
@@ -57,6 +57,10 @@ else ()
         list(APPEND WTF_SOURCES
             posix/CPUTimePOSIX.cpp
         )
+    endif ()
+
+    if (NOT WTF_OS_VITA)
+        list(APPEND WTF_SOURCES posix/OSAllocatorPOSIX.cpp)
     endif ()
 
     if (LOWERCASE_EVENT_LOOP_TYPE STREQUAL "glib")
