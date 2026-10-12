@@ -980,6 +980,11 @@ class Instruction
             $asm.puts "add #{dest.armOperand}, pc, #{dest.armOperand}"
             $asm.puts "ldr #{dest.armOperand}, [#{dest.armOperand}, #{temp.armOperand}]"
 
+            # Vita uses static non-PIC code and native Thumb MOVW/MOVT relocations.
+            $asm.putStr("#elif OS(VITA)")
+            $asm.puts "movw #{dest.armOperand}, \#:lower16:#{labelRef.asmLabel}"
+            $asm.puts "movt #{dest.armOperand}, \#:upper16:#{labelRef.asmLabel}"
+
             # Throw a compiler error everywhere else.
             $asm.putStr("#else")
             $asm.putStr("#error Missing globaladdr implementation")
