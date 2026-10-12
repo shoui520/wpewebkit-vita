@@ -38,6 +38,10 @@
 #include <wtf/Vector.h>
 #include <stdint.h>
 
+#if OS(VITA)
+#include <wtf/vita/CodeCache.h>
+#endif
+
 namespace JSC {
 
 namespace RegisterNames {
@@ -471,7 +475,7 @@ public:
         JumpType type() const { return data.realTypes.m_type; }
         JumpLinkType linkType() const { return data.realTypes.m_linkType; }
         void setLinkType(JumpLinkType linkType) { ASSERT(data.realTypes.m_linkType == LinkInvalid); data.realTypes.m_linkType = linkType; }
-        Condition condition() const { return data.realTypes.m_condition; }
+        Condition condition() const { return static_cast<Condition>(data.realTypes.m_condition); }
         bool isThunk() const { return false; }
     private:
         union {
@@ -480,7 +484,7 @@ public:
                 intptr_t m_to : 31;
                 JumpType m_type : 8;
                 JumpLinkType m_linkType : 8;
-                Condition m_condition : 16;
+                uint16_t m_condition;
             } realTypes;
             struct CopyTypes {
                 uint32_t content[3];
@@ -2869,6 +2873,8 @@ public:
     {
 #if OS(DARWIN)
         sys_icache_invalidate(code, size);
+#elif OS(VITA)
+        WTF::Vita::flushInstructionCache(code, size);
 #elif OS(LINUX)
         size_t page = pageSize();
         uintptr_t current = reinterpret_cast<uintptr_t>(code);

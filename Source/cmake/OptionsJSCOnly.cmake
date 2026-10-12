@@ -1,6 +1,8 @@
 find_package(Threads REQUIRED)
 
 if (VITA)
+    find_path(KUBRIDGE_INCLUDE_DIR NAMES kubridge.h REQUIRED)
+    find_library(KUBRIDGE_LIBRARY NAMES kubridge_stub REQUIRED)
     # vita-elf-create relocates static executables and rejects PIC GOT relocations.
     set(CMAKE_POSITION_INDEPENDENT_CODE FALSE)
     # Match the POSIX feature visibility used by the configure checks.

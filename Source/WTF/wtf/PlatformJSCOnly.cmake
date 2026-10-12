@@ -39,7 +39,13 @@ else ()
         unix/LoggingUnix.cpp
     )
     if (WTF_OS_VITA)
+        list(APPEND WTF_PUBLIC_HEADERS
+            vita/CodeCache.h
+        )
+        list(APPEND WTF_PRIVATE_INCLUDE_DIRECTORIES ${KUBRIDGE_INCLUDE_DIR})
+        list(APPEND WTF_LIBRARIES ${KUBRIDGE_LIBRARY})
         list(APPEND WTF_SOURCES
+            vita/CodeCacheVita.cpp
             vita/CPUTimeVita.cpp
             vita/SignalsVita.cpp
         )
