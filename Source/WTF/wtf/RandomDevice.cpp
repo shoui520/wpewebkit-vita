@@ -29,7 +29,7 @@
 
 #include <stdlib.h>
 
-#if !OS(DARWIN) && !OS(FUCHSIA) && OS(UNIX)
+#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(VITA) && OS(UNIX)
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -49,9 +49,14 @@
 #include <zircon/syscalls.h>
 #endif
 
+#if OS(VITA)
+#include <array>
+#include <psp2/kernel/rng.h>
+#endif
+
 namespace WTF {
 
-#if !OS(DARWIN) && !OS(FUCHSIA) && OS(UNIX)
+#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(VITA) && OS(UNIX)
 NEVER_INLINE NO_RETURN_DUE_TO_CRASH static void crashUnableToOpenURandom()
 {
     CRASH();
@@ -63,7 +68,7 @@ NEVER_INLINE NO_RETURN_DUE_TO_CRASH static void crashUnableToReadFromURandom()
 }
 #endif
 
-#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(WINDOWS)
+#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(VITA) && !OS(WINDOWS)
 RandomDevice::RandomDevice()
 {
     int ret = 0;
@@ -76,7 +81,7 @@ RandomDevice::RandomDevice()
 }
 #endif
 
-#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(WINDOWS)
+#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(VITA) && !OS(WINDOWS)
 RandomDevice::~RandomDevice()
 {
     close(m_fd);
@@ -91,6 +96,15 @@ void RandomDevice::cryptographicallyRandomValues(std::span<uint8_t> buffer)
     RELEASE_ASSERT(!CCRandomGenerateBytes(buffer.data(), buffer.size()));
 #elif OS(FUCHSIA)
     zx_cprng_draw(buffer.data(), buffer.size());
+#elif OS(VITA)
+    // The native interface accepts at most 64 bytes per call.
+    std::array<uint8_t, 64> randomBytes;
+    while (!buffer.empty()) {
+        size_t size = std::min(buffer.size(), randomBytes.size());
+        RELEASE_ASSERT(!sceKernelGetRandomNumber(randomBytes.data(), size));
+        memcpySpan(buffer.first(size), std::span(randomBytes).first(size));
+        buffer = buffer.subspan(size);
+    }
 #elif OS(UNIX)
     ssize_t amountRead = 0;
     while (static_cast<size_t>(amountRead) < buffer.size()) {

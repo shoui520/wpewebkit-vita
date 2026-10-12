@@ -31,6 +31,11 @@
 #include <wtf/Platform.h>
 #include <wtf/text/CString.h>
 
+#if OS(VITA)
+// The Vita runtime exports the XPG function even with GNU feature macros.
+extern "C" int __xpg_strerror_r(int, char*, size_t);
+#endif
+
 namespace WTF {
 
 CString safeStrerror(int errnum)
@@ -44,7 +49,11 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 #if OS(WINDOWS)
     strerror_s(cstringBuffer.data(), cstringBuffer.size(), errnum);
 #else
+#if OS(VITA)
+    auto ret = __xpg_strerror_r(errnum, cstringBuffer.data(), cstringBuffer.size());
+#else
     auto ret = strerror_r(errnum, cstringBuffer.data(), cstringBuffer.size());
+#endif
 
     if constexpr (std::is_same<decltype(ret), char*>::value) {
         // We have GNU strerror_r(), which returns char*. This may or may not be a pointer into
