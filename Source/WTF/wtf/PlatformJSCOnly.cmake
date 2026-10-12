@@ -38,7 +38,11 @@ else ()
         unix/LanguageUnix.cpp
         unix/LoggingUnix.cpp
     )
-    if (WTF_OS_FUCHSIA)
+    if (WTF_OS_VITA)
+        list(APPEND WTF_SOURCES
+            vita/CPUTimeVita.cpp
+        )
+    elseif (WTF_OS_FUCHSIA)
         list(APPEND WTF_SOURCES
             fuchsia/CPUTimeFuchsia.cpp
         )
