@@ -26,6 +26,8 @@
 #include "config.h"
 #include "JSHTMLMediaElement.h"
 
+#if ENABLE(VIDEO)
+
 #include "TrackOpaqueRoot.h"
 #include "WebCoreOpaqueRootInlines.h"
 
@@ -40,3 +42,5 @@ void JSHTMLMediaElement::visitAdditionalChildren(Visitor& visitor)
 DEFINE_VISIT_ADDITIONAL_CHILDREN(JSHTMLMediaElement);
 
 } // namespace WebCore
+
+#endif // ENABLE(VIDEO)
