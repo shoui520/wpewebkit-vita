@@ -30,7 +30,8 @@
 #include "CryptoKeyRaw.h"
 #include "ExceptionOr.h"
 #include "OpenSSLUtilities.h"
-#include <openssl/hkdf.h>
+#include <openssl/kdf.h>
+#include <limits>
 
 namespace WebCore {
 
@@ -40,8 +41,27 @@ ExceptionOr<Vector<uint8_t>> CryptoAlgorithmHKDF::platformDeriveBits(const Crypt
     if (!algorithm)
         return Exception { ExceptionCode::NotSupportedError };
 
+    auto& salt = parameters.saltVector();
+    auto& info = parameters.infoVector();
+    if (key.key().size() > static_cast<size_t>(std::numeric_limits<int>::max()) || salt.size() > static_cast<size_t>(std::numeric_limits<int>::max()) || info.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
+        return Exception { ExceptionCode::OperationError };
+
+    // OpenSSL3 distinguishes a missing buffer from an empty octet string.
+    // The explicit zero lengths ensure this byte is never part of the input.
+    constexpr uint8_t empty = 0;
+    auto* keyData = key.key().isEmpty() ? &empty : key.key().span().data();
+    auto* saltData = salt.isEmpty() ? &empty : salt.span().data();
+    auto context = EvpPKeyCtxPtr(EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr));
+    if (!context || EVP_PKEY_derive_init(context.get()) <= 0
+        || EVP_PKEY_CTX_set_hkdf_md(context.get(), algorithm) <= 0
+        || EVP_PKEY_CTX_set1_hkdf_key(context.get(), keyData, key.key().size()) <= 0
+        || EVP_PKEY_CTX_set1_hkdf_salt(context.get(), saltData, salt.size()) <= 0
+        || EVP_PKEY_CTX_add1_hkdf_info(context.get(), info.span().data(), info.size()) <= 0)
+        return Exception { ExceptionCode::OperationError };
+
     Vector<uint8_t> output(length / 8);
-    if (HKDF(output.mutableSpan().data(), output.size(), algorithm, key.key().span().data(), key.key().size(), parameters.saltVector().span().data(), parameters.saltVector().size(), parameters.infoVector().span().data(), parameters.infoVector().size()) <= 0)
+    size_t outputSize = output.size();
+    if (EVP_PKEY_derive(context.get(), output.mutableSpan().data(), &outputSize) <= 0 || outputSize != output.size())
         return Exception { ExceptionCode::OperationError };
 
     return output;

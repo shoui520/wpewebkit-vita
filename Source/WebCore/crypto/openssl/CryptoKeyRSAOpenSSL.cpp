@@ -32,12 +32,12 @@
 #include "ExceptionOr.h"
 #include "OpenSSLUtilities.h"
 #include <JavaScriptCore/TypedArrayInlines.h>
-#include <openssl/X509.h>
+#include <openssl/x509.h>
 #include <openssl/evp.h>
 
 namespace WebCore {
 
-static size_t getRSAModulusLength(RSA* rsa)
+static size_t getRSAModulusLength(const RSA* rsa)
 {
     if (!rsa)
         return 0;
@@ -164,7 +164,7 @@ bool CryptoKeyRSA::isRestrictedToHash(CryptoAlgorithmIdentifier& identifier) con
 
 size_t CryptoKeyRSA::keySizeInBits() const
 {
-    RSA* rsa = EVP_PKEY_get0_RSA(m_platformKey.get());
+    const RSA* rsa = EVP_PKEY_get0_RSA(m_platformKey.get());
     if (!rsa)
         return 0;
 
@@ -297,7 +297,7 @@ ExceptionOr<Vector<uint8_t>> CryptoKeyRSA::exportPkcs8() const
 
 auto CryptoKeyRSA::algorithm() const -> KeyAlgorithm
 {
-    RSA* rsa = EVP_PKEY_get0_RSA(platformKey());
+    const RSA* rsa = EVP_PKEY_get0_RSA(platformKey());
 
     auto modulusLength = getRSAModulusLength(rsa);
     Vector<uint8_t> publicExponent;
@@ -326,7 +326,7 @@ auto CryptoKeyRSA::algorithm() const -> KeyAlgorithm
 
 std::unique_ptr<CryptoKeyRSAComponents> CryptoKeyRSA::exportData() const
 {
-    RSA* rsa = EVP_PKEY_get0_RSA(platformKey());
+    const RSA* rsa = EVP_PKEY_get0_RSA(platformKey());
     if (!rsa)
         return nullptr;
 

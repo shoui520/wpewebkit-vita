@@ -1,6 +1,9 @@
 include(platform/Cairo.cmake)
 include(platform/FreeType.cmake)
 include(platform/ImageDecoders.cmake)
+include(platform/OpenSSL.cmake)
+
+list(APPEND WebCore_PRIVATE_LIBRARIES OpenSSL::Crypto)
 
 list(APPEND WebCore_SOURCES
     platform/generic/KeyedDecoderGeneric.cpp
@@ -13,6 +16,7 @@ list(APPEND WebCore_SOURCES
     platform/unix/LoggingUnix.cpp
 )
 list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
+    "${WEBCORE_DIR}/crypto/openssl"
     "${WEBCORE_DIR}/platform/graphics/opentype"
     "${WEBCORE_DIR}/platform/network/vita"
     "${WEBCORE_DIR}/platform/text/icu"
