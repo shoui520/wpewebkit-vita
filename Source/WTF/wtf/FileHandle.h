@@ -33,7 +33,7 @@
 
 #if OS(WINDOWS)
 #include <wtf/win/Win32Handle.h>
-#elif OS(LINUX)
+#elif OS(LINUX) || OS(VITA)
 #include <sys/types.h>
 #endif
 
@@ -56,6 +56,21 @@ struct Win32HandleMarkableTraits {
     static HANDLE emptyValue() { return invalidPlatformFileHandle; }
 };
 using PlatformHandleTraits = Win32HandleMarkableTraits;
+#elif OS(VITA)
+// Native I/O UIDs and the POSIX runtime's descriptor numbers have different owners.
+struct PlatformFileHandle {
+    explicit constexpr PlatformFileHandle(int nativeUID = -1)
+        : uid(nativeUID)
+    { }
+    int uid;
+    bool operator==(const PlatformFileHandle&) const = default;
+};
+constexpr PlatformFileHandle invalidPlatformFileHandle;
+typedef ino_t PlatformFileID;
+struct PlatformHandleTraits {
+    static bool isEmptyValue(PlatformFileHandle handle) { return handle.uid < 0; }
+    static PlatformFileHandle emptyValue() { return invalidPlatformFileHandle; }
+};
 #else
 typedef int PlatformFileHandle;
 const PlatformFileHandle invalidPlatformFileHandle = -1;

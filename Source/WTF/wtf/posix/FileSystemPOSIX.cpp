@@ -59,6 +59,7 @@ namespace WTF {
 
 namespace FileSystemImpl {
 
+#if !OS(VITA)
 FileHandle openFile(const String& path, FileOpenMode mode, FileAccessPermission permission, OptionSet<FileLockMode> lockMode, bool failIfFileExists)
 {
     CString fsRep = fileSystemRepresentation(path);
@@ -95,6 +96,7 @@ FileHandle openFile(const String& path, FileOpenMode mode, FileAccessPermission 
 
     return FileHandle::adopt(open(fsRep.data(), platformFlag, permissionFlag), lockMode);
 }
+#endif
 
 std::optional<WallTime> fileCreationTime(const String& path)
 {
@@ -126,6 +128,10 @@ std::optional<WallTime> fileCreationTime(const String& path)
 
 bool fileIDsAreEqual(std::optional<PlatformFileID> a, std::optional<PlatformFileID> b)
 {
+#if OS(VITA)
+    if (!a || !b)
+        return false;
+#endif
     return a == b;
 }
 
@@ -153,7 +159,7 @@ CString fileSystemRepresentation(const String& path)
 }
 #endif
 
-#if !PLATFORM(COCOA)
+#if !PLATFORM(COCOA) && !OS(VITA)
 static const char* temporaryFileDirectory()
 {
 #if USE(GLIB)
@@ -187,10 +193,15 @@ std::pair<String, FileHandle> openTemporaryFile(StringView prefix, StringView su
 
     return { String::fromUTF8(buffer.span().data()), WTF::move(handle) };
 }
-#endif // !PLATFORM(COCOA)
+#endif // !PLATFORM(COCOA) && !OS(VITA)
 
 std::optional<int32_t> getFileDeviceId(const String& path)
 {
+#if OS(VITA)
+    // The selected runtime does not supply a stable native device identity.
+    UNUSED_PARAM(path);
+    return std::nullopt;
+#else
     auto fsFile = fileSystemRepresentation(path);
     if (fsFile.isNull())
         return std::nullopt;
@@ -200,6 +211,7 @@ std::optional<int32_t> getFileDeviceId(const String& path)
         return std::nullopt;
 
     return fileStat.st_dev;
+#endif
 }
 
 // On macOS, stat() used by std::filesystem is much slower than access() when sandboxed.

@@ -36,7 +36,11 @@ FileHandle::FileHandle() = default;
 FileHandle::FileHandle(PlatformFileHandle handle, OptionSet<FileLockMode> lockMode)
     : m_handle(handle)
 {
-#if USE(FILE_LOCK)
+#if OS(VITA)
+    // The native backend has no POSIX flock equivalent.
+    if (lockMode)
+        close();
+#elif USE(FILE_LOCK)
     if (lockMode)
         lock(lockMode);
 #else

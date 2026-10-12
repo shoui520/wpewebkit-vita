@@ -46,6 +46,8 @@ else ()
         list(APPEND WTF_SOURCES
             vita/CodeCacheVita.cpp
             vita/CPUTimeVita.cpp
+            vita/FileHandleVita.cpp
+            vita/FileSystemVita.cpp
             vita/OSAllocatorVita.cpp
             vita/SignalsVita.cpp
         )
@@ -60,7 +62,10 @@ else ()
     endif ()
 
     if (NOT WTF_OS_VITA)
-        list(APPEND WTF_SOURCES posix/OSAllocatorPOSIX.cpp)
+        list(APPEND WTF_SOURCES
+            posix/FileHandlePOSIX.cpp
+            posix/OSAllocatorPOSIX.cpp
+        )
     endif ()
 
     if (LOWERCASE_EVENT_LOOP_TYPE STREQUAL "glib")
@@ -71,7 +76,6 @@ else ()
     endif ()
 
     list(APPEND WTF_SOURCES
-        posix/FileHandlePOSIX.cpp
         posix/FileSystemPOSIX.cpp
         posix/MappedFileDataPOSIX.cpp
 
