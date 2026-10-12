@@ -39,7 +39,7 @@
 typedef ucontext_t mcontext_t;
 #elif OS(QNX)
 #include <ucontext.h>
-#else
+#elif HAVE(MACHINE_CONTEXT)
 #include <sys/ucontext.h>
 #endif
 

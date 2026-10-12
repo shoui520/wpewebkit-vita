@@ -1,5 +1,32 @@
 find_package(Threads REQUIRED)
 
+if (VITA)
+    # Match the POSIX feature visibility used by the configure checks.
+    add_compile_definitions(_GNU_SOURCE=1)
+    # libstdc++ probes pthread_cancel through a weak reference and calls other
+    # pthread functions weakly. A normal static archive link leaves these out,
+    # causing std::call_once to fail even when pthread_create is linked.
+    if (VITA_C_RUNTIME STREQUAL "SceLibcPosix")
+        if (NOT VITA_RUNTIME_LINKAGE_CONFIGURED)
+            message(FATAL_ERROR "SceLibcPosix requires a toolchain configured with its CRT, runtime imports, and pthread module")
+        endif ()
+        check_cxx_source_compiles("
+            #include <sys/mman.h>
+            #include <sys/uio.h>
+            int main() { }
+        " VITA_RUNTIME_HEADERS_SUPPORTED)
+        if (NOT VITA_RUNTIME_HEADERS_SUPPORTED)
+            message(FATAL_ERROR "SceLibcPosix requires its POSIX header overlay")
+        endif ()
+        # The runtime toolchain supplies whole-archive pthread module imports
+        # for every executable, including CMake's compiler and feature checks.
+        set_property(TARGET Threads::Threads PROPERTY INTERFACE_LINK_LIBRARIES "")
+    else ()
+        set_property(TARGET Threads::Threads PROPERTY INTERFACE_LINK_LIBRARIES
+            "-Wl,--whole-archive;-lpthread;-Wl,--no-whole-archive")
+    endif ()
+endif ()
+
 if (MSVC)
     include(OptionsMSVC)
 else ()
@@ -16,7 +43,11 @@ set(PROJECT_VERSION_MICRO 0)
 set(PROJECT_VERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_MICRO})
 
 WEBKIT_OPTION_BEGIN()
-WEBKIT_OPTION_DEFINE(ENABLE_STATIC_JSC "Whether to build JavaScriptCore as a static library." PUBLIC OFF)
+set(ENABLE_STATIC_JSC_DEFAULT OFF)
+if (VITA)
+    set(ENABLE_STATIC_JSC_DEFAULT ON)
+endif ()
+WEBKIT_OPTION_DEFINE(ENABLE_STATIC_JSC "Whether to build JavaScriptCore as a static library." PUBLIC ${ENABLE_STATIC_JSC_DEFAULT})
 WEBKIT_OPTION_DEFINE(USE_LIBBACKTRACE "Whether to enable usage of libbacktrace." PUBLIC OFF)
 WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_REMOTE_INSPECTOR PRIVATE OFF)
 if (NOT WIN32)
@@ -27,6 +58,31 @@ if (WIN32)
 endif ()
 WEBKIT_OPTION_DEFINE(ENABLE_JSC_GLIB_API "Whether to enable the JavaScriptCore GLib API." PUBLIC OFF)
 WEBKIT_OPTION_DEFINE(USE_SYSTEM_UNIFDEF "Whether to use a system-provided unifdef" PRIVATE OFF)
+
+if (VITA)
+    if (NOT WTF_CPU_ARM OR NOT ARM_THUMB2_DETECTED)
+        message(FATAL_ERROR "Vita JavaScriptCore requires an ARMv7 Thumb-2 toolchain")
+    endif ()
+    check_cxx_source_compiles("
+        #if !defined(__vita__) || !defined(__thumb2__) || !defined(__ARM_PCS_VFP) || __ARM_ARCH < 7
+        #error Vita ARMv7 Thumb-2 hard-float ABI is required
+        #endif
+        static_assert(sizeof(void*) == 4);
+        int main() { }
+    " VITA_JSC_ABI_SUPPORTED)
+    if (NOT VITA_JSC_ABI_SUPPORTED)
+        message(FATAL_ERROR "Vita JavaScriptCore requires the 32-bit ARMv7 Thumb-2 hard-float ABI")
+    endif ()
+    WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_JIT PRIVATE ON)
+    WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_DFG_JIT PRIVATE ON)
+    WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_FTL_JIT PRIVATE OFF)
+    WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_C_LOOP PRIVATE OFF)
+    WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_SAMPLING_PROFILER PRIVATE OFF)
+    WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEBASSEMBLY PRIVATE OFF)
+    # Use the platform runtime allocator instead of bmalloc's VM assumptions.
+    WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_SYSTEM_MALLOC PRIVATE ON)
+    WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_ISO_MALLOC PRIVATE OFF)
+endif ()
 
 WEBKIT_OPTION_END()
 
@@ -46,13 +102,13 @@ set(ENABLE_WEBINSPECTORUI OFF)
 set(ENABLE_WEBGL OFF)
 set(ENABLE_WEBGPU OFF)
 
-if (WIN32)
+if (WIN32 OR VITA)
     set(ENABLE_API_TESTS OFF)
 else ()
     set(ENABLE_API_TESTS ON)
 endif ()
 
-if (WTF_CPU_ARM OR WTF_CPU_MIPS)
+if ((WTF_CPU_ARM OR WTF_CPU_MIPS) AND NOT VITA)
     SET_AND_EXPOSE_TO_BUILD(USE_CAPSTONE TRUE)
 endif ()
 

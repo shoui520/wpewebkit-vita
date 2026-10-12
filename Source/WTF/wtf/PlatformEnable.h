@@ -725,8 +725,8 @@
 #endif
 
 #if USE(JSVALUE32_64)
-#if CPU(ARM_THUMB2) && CPU(ARM_HARDFP) && OS(LINUX)
-/* On ARMv7 Linux the JIT is enabled unless explicitly disabled. */
+#if CPU(ARM_THUMB2) && CPU(ARM_HARDFP) && (OS(LINUX) || OS(VITA))
+/* On ARMv7 Linux and Vita the JIT is enabled unless explicitly disabled. */
 #if !defined(ENABLE_JIT)
 #define ENABLE_JIT 1
 #endif
@@ -794,7 +794,7 @@
 #endif
 
 /* Enable the DFG JIT on ARMv7.  Only tested on iOS, Linux, and FreeBSD. */
-#if (CPU(ARM_THUMB2) || CPU(ARM64)) && (OS(DARWIN) || OS(LINUX) || OS(FREEBSD))
+#if (CPU(ARM_THUMB2) || CPU(ARM64)) && (OS(DARWIN) || OS(LINUX) || OS(FREEBSD) || OS(VITA))
 #define ENABLE_DFG_JIT 1
 #endif
 

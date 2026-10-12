@@ -116,7 +116,12 @@ private:
 
 #if USE(PTHREADS)
 
+#if OS(VITA)
+// VitaSDK represents keys as opaque pointers rather than integer indices.
+static constexpr ThreadSpecificKey InvalidThreadSpecificKey = nullptr;
+#else
 static constexpr ThreadSpecificKey InvalidThreadSpecificKey = PTHREAD_KEYS_MAX;
+#endif
 
 inline void threadSpecificKeyCreate(ThreadSpecificKey* key, void (*destructor)(void *))
 {

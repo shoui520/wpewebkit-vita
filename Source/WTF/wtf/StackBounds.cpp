@@ -29,6 +29,10 @@
 
 #include <windows.h>
 
+#elif OS(VITA)
+
+#include <psp2/kernel/threadmgr/thread.h>
+
 #elif OS(UNIX) || OS(HAIKU)
 
 #include <pthread.h>
@@ -91,6 +95,23 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
     void* origin = static_cast<char*>(bound) + tls->__stacksize;
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     return StackBounds { origin, bound };
+}
+
+#elif OS(VITA)
+
+StackBounds StackBounds::currentThreadStackBoundsInternal()
+{
+    // VitaSDK's pthread API does not expose pthread_getattr_np. Query the
+    // kernel from the owning thread, including threads created outside WTF.
+    SceKernelThreadInfo info { };
+    info.size = sizeof(info);
+    int result = sceKernelGetThreadInfo(sceKernelGetThreadId(), &info);
+    RELEASE_ASSERT(!result);
+    RELEASE_ASSERT(info.stack && info.stackSize > 0);
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+    void* origin = static_cast<char*>(info.stack) + info.stackSize;
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+    return StackBounds { origin, info.stack };
 }
 
 #elif OS(UNIX) || OS(HAIKU)

@@ -420,7 +420,7 @@
 #define HAVE_URL_FORMATTING 1
 #endif
 
-#if !OS(WINDOWS) && !OS(QNX)
+#if !OS(WINDOWS) && !OS(QNX) && !OS(VITA)
 #define HAVE_STACK_BOUNDS_FOR_NEW_THREAD 1
 #endif
 

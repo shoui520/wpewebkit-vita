@@ -140,7 +140,12 @@ if (NOT HAS_RUN_WEBKIT_COMMON)
     # -----------------------------------------------------------------------------
     # Determine the operating system
     # -----------------------------------------------------------------------------
-    if (UNIX)
+    if (VITA)
+        # VitaSDK uses CMAKE_SYSTEM_NAME=Generic. Vita supplies a subset of
+        # POSIX; native implementations provide the remaining services.
+        set(WTF_OS_VITA 1)
+        set(WTF_OS_UNIX 1)
+    elseif (UNIX)
         if (APPLE)
             set(WTF_OS_MACOS 1)
         elseif (CMAKE_SYSTEM_NAME MATCHES "Linux")

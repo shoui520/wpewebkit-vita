@@ -131,6 +131,11 @@
 #define WTF_OS_WINDOWS 1
 #endif
 
+/* OS(VITA) - PlayStation Vita with VitaSDK */
+#if defined(__vita__)
+#define WTF_OS_VITA 1
+#endif
+
 
 /* OS(UNIX) - Any Unix-like system */
 #if    OS(AIX)              \
@@ -142,6 +147,7 @@
     || OS(LINUX)            \
     || OS(NETBSD)           \
     || OS(OPENBSD)          \
+    || OS(VITA)             \
     || defined(unix)        \
     || defined(__unix)      \
     || defined(__unix__)

@@ -493,6 +493,11 @@ int main() {
     check_cxx_source_compiles("${ATOMIC_TEST_SOURCE}" ATOMICS_ARE_BUILTIN)
     if (NOT ATOMICS_ARE_BUILTIN)
         set(CMAKE_REQUIRED_LIBRARIES atomic)
+        if (WTF_OS_VITA)
+            # GCC's static libatomic uses pthread mutexes for larger objects.
+            find_package(Threads REQUIRED)
+            list(APPEND CMAKE_REQUIRED_LIBRARIES Threads::Threads)
+        endif ()
         check_cxx_source_compiles("${ATOMIC_TEST_SOURCE}" ATOMICS_REQUIRE_LIBATOMIC)
         # If we failed to build the test source with libatomic then something is wrong
         if (NOT ATOMICS_REQUIRE_LIBATOMIC)

@@ -53,7 +53,7 @@
 #include <wtf/WordLock.h>
 #include <wtf/text/AtomStringTable.h>
 
-#if USE(PTHREADS) && !OS(DARWIN)
+#if USE(PTHREADS) && !OS(DARWIN) && !OS(VITA)
 #include <signal.h>
 #endif
 
@@ -329,7 +329,7 @@ protected:
     void establishPlatformSpecificHandle(PlatformThreadHandle, ThreadIdentifier);
 #endif
 
-#if USE(PTHREADS) && !OS(DARWIN)
+#if USE(PTHREADS) && !OS(DARWIN) && !OS(VITA)
     static void signalHandlerSuspendResume(int, siginfo_t*, void* ucontext);
 #endif
 
