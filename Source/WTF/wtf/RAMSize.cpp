@@ -30,6 +30,9 @@
 
 #if OS(WINDOWS)
 #include <windows.h>
+#elif OS(VITA)
+#include <psp2/kernel/sysmem.h>
+#include <wtf/Assertions.h>
 #elif USE(SYSTEM_MALLOC)
 #if OS(LINUX) || OS(FREEBSD)
 #include <sys/sysinfo.h>
@@ -59,6 +62,15 @@ static size_t computeRAMSize()
     if (!result)
         return ramSizeGuess;
     return status.ullTotalPhys;
+#elif OS(VITA)
+    // Retail applications cannot query their total subbudget. Cache the
+    // remaining USER_RW capacity as a conservative heap-sizing budget;
+    // code, runtime heaps and other allocations already charged are excluded.
+    SceKernelFreeMemorySizeInfo info { };
+    info.size = sizeof(info);
+    RELEASE_ASSERT(!sceKernelGetFreeMemorySize(&info));
+    RELEASE_ASSERT(info.size_user > 0);
+    return static_cast<size_t>(info.size_user);
 #elif USE(SYSTEM_MALLOC)
 #if OS(LINUX) || OS(FREEBSD)
     struct sysinfo si;

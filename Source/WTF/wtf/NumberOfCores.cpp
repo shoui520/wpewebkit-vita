@@ -81,6 +81,10 @@ int numberOfProcessorCores()
     GetSystemInfo(&sysInfo);
 
     s_numberOfCores = sysInfo.dwNumberOfProcessors;
+#elif OS(VITA)
+    UNUSED_PARAM(defaultIfUnavailable);
+    // Three Cortex-A9 cores are available to application threads.
+    s_numberOfCores = 3;
 #else
     s_numberOfCores = defaultIfUnavailable;
 #endif
