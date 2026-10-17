@@ -32,12 +32,20 @@
 #include "CryptoKeyRSA.h"
 #include "ExceptionOr.h"
 #include "OpenSSLUtilities.h"
+#include <openssl/rsa.h>
+
+// OpenSSL 3 declares these as functions instead of macros.
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L || (defined(EVP_PKEY_CTX_set_rsa_pss_saltlen) && defined(EVP_PKEY_CTX_set_rsa_mgf1_md))
+#define HAVE_RSA_PSS_PARAMETERS 1
+#else
+#define HAVE_RSA_PSS_PARAMETERS 0
+#endif
 
 namespace WebCore {
 
 ExceptionOr<Vector<uint8_t>> CryptoAlgorithmRSA_PSS::platformSign(const CryptoAlgorithmRsaPssParams& parameters, const CryptoKeyRSA& key, const Vector<uint8_t>& data)
 {
-#if defined(EVP_PKEY_CTX_set_rsa_pss_saltlen) && defined(EVP_PKEY_CTX_set_rsa_mgf1_md)
+#if HAVE_RSA_PSS_PARAMETERS
     const EVP_MD* md = digestAlgorithm(key.hashAlgorithmIdentifier());
     if (!md)
         return Exception { ExceptionCode::NotSupportedError };
@@ -82,7 +90,7 @@ ExceptionOr<Vector<uint8_t>> CryptoAlgorithmRSA_PSS::platformSign(const CryptoAl
 
 ExceptionOr<bool> CryptoAlgorithmRSA_PSS::platformVerify(const CryptoAlgorithmRsaPssParams& parameters, const CryptoKeyRSA& key, const Vector<uint8_t>& signature, const Vector<uint8_t>& data)
 {
-#if defined(EVP_PKEY_CTX_set_rsa_pss_saltlen) && defined(EVP_PKEY_CTX_set_rsa_mgf1_md)
+#if HAVE_RSA_PSS_PARAMETERS
     const EVP_MD* md = digestAlgorithm(key.hashAlgorithmIdentifier());
     if (!md)
         return Exception { ExceptionCode::NotSupportedError };
