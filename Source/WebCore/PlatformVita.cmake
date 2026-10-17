@@ -25,6 +25,7 @@ list(APPEND WebCore_SOURCES
     platform/vita/MIMETypeRegistryVita.cpp
     platform/vita/PasteboardVita.cpp
     platform/vita/PlatformKeyboardEventVita.cpp
+    platform/vita/PublicSuffixStoreVita.cpp
     platform/vita/SharedMemoryVita.cpp
 )
 list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
