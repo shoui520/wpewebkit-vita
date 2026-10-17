@@ -33,6 +33,8 @@
 #include "DNSResolveQueueCurl.h"
 #elif USE(CF)
 #include "DNSResolveQueueCFNet.h"
+#elif OS(VITA)
+#include "DNSResolveQueueVita.h"
 #endif
 
 #include <wtf/CompletionHandler.h>

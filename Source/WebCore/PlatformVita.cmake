@@ -10,6 +10,7 @@ list(APPEND WebCore_SOURCES
     platform/generic/KeyedEncoderGeneric.cpp
     platform/generic/ScrollbarsControllerGeneric.cpp
     platform/graphics/opentype/OpenTypeVerticalData.cpp
+    platform/network/vita/DNSResolveQueueVita.cpp
     platform/network/vita/ResourceModelsVita.cpp
     platform/text/Hyphenation.cpp
     platform/text/LocaleICU.cpp
