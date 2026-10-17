@@ -22,6 +22,7 @@ list(APPEND WebCore_SOURCES
     platform/text/Hyphenation.cpp
     platform/text/LocaleICU.cpp
     platform/unix/LoggingUnix.cpp
+    platform/vita/MIMETypeRegistryVita.cpp
     platform/vita/PasteboardVita.cpp
     platform/vita/SharedMemoryVita.cpp
 )
