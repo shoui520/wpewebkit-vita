@@ -26,10 +26,10 @@
 #include "config.h"
 #include "AV1Utilities.h"
 
-#include "BitReader.h"
 #include "MediaCapabilitiesInfo.h"
 #include "TrackInfo.h"
 #include "VideoConfiguration.h"
+#include <WebCore/BitReader.h>
 #include <wtf/HashMap.h>
 #include <wtf/HashTraits.h>
 #include <wtf/NeverDestroyed.h>

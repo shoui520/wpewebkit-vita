@@ -26,8 +26,8 @@
 #include "config.h"
 #include "VP9Utilities.h"
 
-#include "BitReader.h"
 #include <JavaScriptCore/DataView.h>
+#include <WebCore/BitReader.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/text/IntegerToStringConversion.h>
 #include <wtf/text/StringBuilder.h>
