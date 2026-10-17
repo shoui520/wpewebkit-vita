@@ -14,6 +14,7 @@ list(APPEND WebCore_SOURCES
     platform/text/Hyphenation.cpp
     platform/text/LocaleICU.cpp
     platform/unix/LoggingUnix.cpp
+    platform/vita/SharedMemoryVita.cpp
 )
 list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
     "${WEBCORE_DIR}/crypto/openssl"

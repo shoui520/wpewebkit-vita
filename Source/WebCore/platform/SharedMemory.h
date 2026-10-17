@@ -44,6 +44,10 @@
 #include <wtf/MachSendRight.h>
 #endif
 
+#if OS(VITA)
+#include <wtf/RefPtr.h>
+#endif
+
 #if PLATFORM(COCOA)
 OBJC_CLASS NSData;
 #endif
@@ -53,6 +57,7 @@ namespace WebCore {
 class FragmentedSharedBuffer;
 class ProcessIdentity;
 class SharedBuffer;
+class SharedMemory;
 
 enum class MemoryLedger { None, Default, Network, Media, Graphics, Neural };
 enum class SharedMemoryProtection : bool { ReadOnly, ReadWrite };
@@ -68,6 +73,9 @@ public:
         MachSendRight;
 #elif OS(WINDOWS)
         Win32Handle;
+#elif OS(VITA)
+        // Single process: a handle keeps the memory it names alive.
+        RefPtr<SharedMemory>;
 #endif
 
     // Note: this function should not be used to share writable arbitrary malloc memory to
