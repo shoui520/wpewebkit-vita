@@ -12,6 +12,7 @@ list(APPEND WebCore_SOURCES
     platform/graphics/opentype/OpenTypeVerticalData.cpp
     platform/network/vita/DNSResolveQueueVita.cpp
     platform/network/vita/ResourceModelsVita.cpp
+    platform/sql/vita/SQLiteVFSVita.cpp
     platform/text/Hyphenation.cpp
     platform/text/LocaleICU.cpp
     platform/unix/LoggingUnix.cpp
