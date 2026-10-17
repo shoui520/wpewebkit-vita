@@ -6,6 +6,8 @@ include(platform/OpenSSL.cmake)
 list(APPEND WebCore_PRIVATE_LIBRARIES OpenSSL::Crypto)
 
 list(APPEND WebCore_SOURCES
+    accessibility/playstation/AccessibilityObjectPlayStation.cpp
+    accessibility/vita/AXObjectCacheVita.cpp
     platform/generic/KeyedDecoderGeneric.cpp
     platform/generic/KeyedEncoderGeneric.cpp
     platform/generic/ScrollbarsControllerGeneric.cpp
