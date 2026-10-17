@@ -13,6 +13,7 @@ list(APPEND WebCore_SOURCES
     platform/generic/KeyedEncoderGeneric.cpp
     platform/generic/ScrollbarsControllerGeneric.cpp
     platform/graphics/opentype/OpenTypeVerticalData.cpp
+    platform/graphics/vita/GraphicsLayerVita.cpp
     platform/network/vita/DNSResolveQueueVita.cpp
     platform/network/vita/ResourceModelsVita.cpp
     platform/sql/vita/SQLiteVFSVita.cpp
