@@ -8,6 +8,7 @@ list(APPEND WebCore_PRIVATE_LIBRARIES OpenSSL::Crypto)
 list(APPEND WebCore_SOURCES
     accessibility/playstation/AccessibilityObjectPlayStation.cpp
     accessibility/vita/AXObjectCacheVita.cpp
+    editing/vita/EditorVita.cpp
     platform/generic/KeyedDecoderGeneric.cpp
     platform/generic/KeyedEncoderGeneric.cpp
     platform/generic/ScrollbarsControllerGeneric.cpp
@@ -18,6 +19,7 @@ list(APPEND WebCore_SOURCES
     platform/text/Hyphenation.cpp
     platform/text/LocaleICU.cpp
     platform/unix/LoggingUnix.cpp
+    platform/vita/PasteboardVita.cpp
     platform/vita/SharedMemoryVita.cpp
 )
 list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
