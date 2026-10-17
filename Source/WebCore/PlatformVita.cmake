@@ -16,6 +16,7 @@ list(APPEND WebCore_SOURCES
     platform/graphics/vita/GraphicsLayerVita.cpp
     platform/graphics/vita/SystemFontDatabaseVita.cpp
     platform/network/vita/DNSResolveQueueVita.cpp
+    platform/network/vita/NetworkStorageSessionVita.cpp
     platform/network/vita/ResourceModelsVita.cpp
     platform/sql/vita/SQLiteVFSVita.cpp
     platform/text/Hyphenation.cpp
