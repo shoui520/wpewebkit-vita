@@ -103,7 +103,9 @@ RefPtr<FcPattern> FontSetCache::bestForCharacters(const FontDescription& fontDes
     if (!bestPattern)
         bestPattern = cachedFontSet.patterns[0].first;
 
-    return adoptRef(FcFontRenderPrepare(nullptr, cachedFontSet.pattern.get(), bestPattern));
+    return cachedFontSet.renderPreparedPatterns.ensure(bestPattern, [&] {
+        return adoptRef(FcFontRenderPrepare(nullptr, cachedFontSet.pattern.get(), bestPattern));
+    }).iterator->value;
 }
 
 void FontSetCache::clear()

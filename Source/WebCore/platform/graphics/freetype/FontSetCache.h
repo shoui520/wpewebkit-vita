@@ -83,6 +83,8 @@ private:
         RefPtr<FcPattern> pattern;
         FcUniquePtr<FcFontSet> fontSet;
         Vector<std::pair<FcPattern*, FcCharSet*>> patterns;
+        // Each fallback lookup picks one of the patterns; preparing it for rendering is costly.
+        HashMap<FcPattern*, RefPtr<FcPattern>> renderPreparedPatterns;
     };
 
     HashMap<FontSetCacheKey, std::unique_ptr<FontSet>, FontSetCacheKeyHash, SimpleClassHashTraits<FontSetCacheKey>> m_cache;
