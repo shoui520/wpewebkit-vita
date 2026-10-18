@@ -29,7 +29,7 @@
 
 #if ENABLE(WEB_AUDIO)
 
-#if !OS(DARWIN) && !USE(GSTREAMER)
+#if !OS(DARWIN) && !USE(GSTREAMER) && !PLATFORM(VITA)
 
 #include "FFTFrame.h"
 

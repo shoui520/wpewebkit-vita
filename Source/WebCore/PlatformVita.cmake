@@ -10,6 +10,9 @@ list(APPEND WebCore_SOURCES
     accessibility/vita/AXObjectCacheVita.cpp
     dom/glib/PointerEventGLib.cpp
     editing/vita/EditorVita.cpp
+    platform/audio/vita/AudioDestinationVita.cpp
+    platform/audio/vita/AudioFileReaderVita.cpp
+    platform/audio/vita/FFTFrameVita.cpp
     platform/audio/vita/FFmpegAudioDecoder.cpp
     platform/audio/vita/MP4AudioParser.cpp
     platform/generic/KeyedDecoderGeneric.cpp
