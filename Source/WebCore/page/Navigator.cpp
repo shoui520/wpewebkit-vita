@@ -457,6 +457,9 @@ int Navigator::maxTouchPoints() const
     RefPtr document = this->document();
     if (!document || !document->quirks().needsZeroMaxTouchPointsQuirk())
         return 5;
+#elif PLATFORM(VITA)
+    // The front touch panel tracks six contacts.
+    return 6;
 #endif
 
     return 0;
