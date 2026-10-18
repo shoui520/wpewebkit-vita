@@ -61,6 +61,8 @@ static constexpr bool verbose = false;
 }
 }
 
+// Without a machine context (the Vita) there is no fault handler: bounds checks are explicit.
+#if OS(WINDOWS) || HAVE(MACHINE_CONTEXT)
 static SignalAction trapHandler(Signal signal, SigInfo& sigInfo, PlatformRegisters& context)
 {
     RELEASE_ASSERT(signal == Signal::AccessFault);
@@ -130,6 +132,7 @@ static SignalAction trapHandler(Signal signal, SigInfo& sigInfo, PlatformRegiste
     }
     return SignalAction::NotHandled;
 }
+#endif // OS(WINDOWS) || HAVE(MACHINE_CONTEXT)
 
 void activateSignalingMemory()
 {
@@ -158,9 +161,11 @@ void prepareSignalingMemory()
 #if CPU(ARM64E) && HAVE(HARDENED_MACH_EXCEPTIONS)
         presignedTrampoline = g_wtfConfig.signalHandlers.presignReturnPCForHandler(LLInt::getCodePtr<NoPtrTag>(wasm_throw_from_fault_handler_trampoline_reg_instance));
 #endif
+#if OS(WINDOWS) || HAVE(MACHINE_CONTEXT)
         addSignalHandler(Signal::AccessFault, [] (Signal signal, SigInfo& sigInfo, PlatformRegisters& ucontext) {
             return trapHandler(signal, sigInfo, ucontext);
         });
+#endif
     });
 }
 

@@ -615,7 +615,8 @@ static void overrideDefaults()
     Options::usePollingTraps() = true;
 #endif
 
-#if !ENABLE(WEBASSEMBLY)
+#if !ENABLE(WEBASSEMBLY) || OS(VITA)
+    // The Vita has no signals to catch out-of-bounds accesses with.
     Options::useWasmFastMemory() = false;
     Options::useWasmFaultSignalHandler() = false;
 #endif
