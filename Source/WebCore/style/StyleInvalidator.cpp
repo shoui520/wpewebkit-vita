@@ -26,11 +26,13 @@
 #include "config.h"
 #include "StyleInvalidator.h"
 
+#include "CSSKeyframesRule.h"
 #include "Document.h"
 #include "ElementChildIteratorInlines.h"
 #include "ElementRareData.h"
 #include "ElementRuleCollector.h"
 #include "HTMLSlotElement.h"
+#include "RenderStyle+GettersInlines.h"
 #include "RuleSetBuilder.h"
 #include "SelectorMatchingState.h"
 #include "ShadowRoot.h"
@@ -46,17 +48,27 @@
 namespace WebCore {
 namespace Style {
 
-static bool shouldDirtyAllStyle(const Vector<Ref<StyleRuleBase>>& rules)
+// Keyframes rules only affect elements with animations, which are found separately.
+static bool shouldDirtyAllStyle(const Vector<Ref<StyleRuleBase>>& rules, bool& hasKeyframesRules)
 {
     for (auto& rule : rules) {
         if (RefPtr styleRuleMedia = dynamicDowncast<StyleRuleMedia>(rule.get())) {
-            if (shouldDirtyAllStyle(styleRuleMedia->childRules()))
+            if (shouldDirtyAllStyle(styleRuleMedia->childRules(), hasKeyframesRules))
+                return true;
+            continue;
+        }
+        if (RefPtr styleRuleSupports = dynamicDowncast<StyleRuleSupports>(rule.get())) {
+            if (shouldDirtyAllStyle(styleRuleSupports->childRules(), hasKeyframesRules))
                 return true;
             continue;
         }
         if (RefPtr styleRuleWithNesting = dynamicDowncast<StyleRuleWithNesting>(rule.get())) {
-            if (shouldDirtyAllStyle(styleRuleWithNesting->nestedRules()))
+            if (shouldDirtyAllStyle(styleRuleWithNesting->nestedRules(), hasKeyframesRules))
                 return true;
+            continue;
+        }
+        if (is<StyleRuleKeyframes>(rule)) {
+            hasKeyframesRules = true;
             continue;
         }
         // FIXME: At least font faces don't need full recalc in all cases.
@@ -66,23 +78,23 @@ static bool shouldDirtyAllStyle(const Vector<Ref<StyleRuleBase>>& rules)
     return false;
 }
 
-static bool shouldDirtyAllStyle(const StyleSheetContents& sheet)
+static bool shouldDirtyAllStyle(const StyleSheetContents& sheet, bool& hasKeyframesRules)
 {
     for (auto& import : sheet.importRules()) {
         if (!import->styleSheet())
             continue;
-        if (shouldDirtyAllStyle(*import->styleSheet()))
+        if (shouldDirtyAllStyle(*import->styleSheet(), hasKeyframesRules))
             return true;
     }
-    if (shouldDirtyAllStyle(sheet.childRules()))
+    if (shouldDirtyAllStyle(sheet.childRules(), hasKeyframesRules))
         return true;
     return false;
 }
 
-static bool shouldDirtyAllStyle(const Vector<Ref<StyleSheetContents>>& sheets)
+static bool shouldDirtyAllStyle(const Vector<Ref<StyleSheetContents>>& sheets, bool& hasKeyframesRules)
 {
     for (auto& sheet : sheets) {
-        if (shouldDirtyAllStyle(sheet))
+        if (shouldDirtyAllStyle(sheet, hasKeyframesRules))
             return true;
     }
     return false;
@@ -91,8 +103,8 @@ static bool shouldDirtyAllStyle(const Vector<Ref<StyleSheetContents>>& sheets)
 Invalidator::Invalidator(const Vector<Ref<StyleSheetContents>>& sheets, const MQ::MediaQueryEvaluator& mediaQueryEvaluator)
     : m_ownedRuleSet(RuleSet::create())
     , m_ruleSets({ { m_ownedRuleSet } })
-    , m_dirtiesAllStyle(shouldDirtyAllStyle(sheets))
 {
+    m_dirtiesAllStyle = shouldDirtyAllStyle(sheets, m_invalidatesAnimations);
     if (m_dirtiesAllStyle)
         return;
 
@@ -234,6 +246,30 @@ void Invalidator::invalidateStyle(Document& document)
     invalidateStyleForTree(*documentElement, &selectorMatchingState);
 }
 
+static bool hasAnimations(const RenderStyle* style)
+{
+    if (!style)
+        return false;
+    if (style->hasAnimations())
+        return true;
+    for (auto& pseudoStyle : style->cachedPseudoStyles().values()) {
+        if (pseudoStyle && pseudoStyle->hasAnimations())
+            return true;
+    }
+    return false;
+}
+
+// An animation whose keyframes rule did not exist starts only when its element's style is resolved again.
+static void invalidateElementsWithAnimations(ContainerNode& root)
+{
+    for (Ref element : descendantsOfType<Element>(root)) {
+        if (hasAnimations(element->renderOrDisplayContentsStyle()))
+            element->invalidateStyleInternal();
+        if (RefPtr shadowRoot = element->shadowRoot())
+            invalidateElementsWithAnimations(*shadowRoot);
+    }
+}
+
 void Invalidator::invalidateStyle(Scope& scope)
 {
     if (m_dirtiesAllStyle) {
@@ -241,12 +277,25 @@ void Invalidator::invalidateStyle(Scope& scope)
         return;
     }
 
-    if (RefPtr shadowRoot = scope.shadowRoot()) {
+    RefPtr shadowRoot = scope.shadowRoot();
+    if (shadowRoot)
         invalidateStyle(*shadowRoot);
+    else
+        invalidateStyle(scope.document());
+
+    if (!m_invalidatesAnimations)
+        return;
+    if (!shadowRoot) {
+        invalidateElementsWithAnimations(scope.document());
         return;
     }
-
-    invalidateStyle(scope.document());
+    // The shadow tree's keyframes can also animate its host and slotted elements.
+    if (RefPtr host = shadowRoot->host()) {
+        if (hasAnimations(host->renderOrDisplayContentsStyle()))
+            host->invalidateStyleInternal();
+        invalidateElementsWithAnimations(*host);
+    }
+    invalidateElementsWithAnimations(*shadowRoot);
 }
 
 void Invalidator::invalidateStyle(ShadowRoot& shadowRoot)

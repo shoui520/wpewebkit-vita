@@ -96,6 +96,7 @@ private:
     RuleInformation m_ruleInformation;
 
     bool m_dirtiesAllStyle { false };
+    bool m_invalidatesAnimations { false };
 };
 
 }
