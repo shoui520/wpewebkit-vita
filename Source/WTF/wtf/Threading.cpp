@@ -111,6 +111,11 @@ static std::optional<size_t> stackSize(ThreadType threadType)
 #if PLATFORM(PLAYSTATION)
     if (threadType == ThreadType::JavaScript)
         return 512 * KB;
+#elif OS(VITA)
+    // Stacks come out of the few MiB of user memory the malloc heap leaves.
+    if (threadType == ThreadType::JavaScript || threadType == ThreadType::Compiler)
+        return 512 * KB;
+    return 256 * KB;
 #elif OS(DARWIN) && (ASAN_ENABLED || ASSERT_ENABLED)
     if (threadType == ThreadType::Compiler)
         return 1 * MB; // ASan / Debug build needs more stack space.
