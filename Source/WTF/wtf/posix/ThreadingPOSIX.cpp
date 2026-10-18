@@ -48,6 +48,9 @@
 extern "C" int sceKernelSuspendThreadForVM(SceUID);
 extern "C" int sceKernelResumeThreadForVM(SceUID);
 extern "C" int sceKernelGetThreadContextForVM(SceUID, WTF::VitaCPUContext*, WTF::VitaFPUContext*);
+// Like sceUserMainThreadCpuAffinityMask: an application can define this to keep
+// WTF threads off the cores it reserves for its main thread.
+extern "C" __attribute__((weak)) unsigned vitaSecondaryThreadCpuAffinityMask;
 #endif
 
 #if OS(HAIKU)
@@ -377,6 +380,10 @@ void Thread::initializeCurrentThreadInternal(const char* threadName)
     prctl(PR_SET_NAME, normalizeThreadName(threadName));
 #else
     UNUSED_PARAM(threadName);
+#endif
+#if OS(VITA)
+    if (&vitaSecondaryThreadCpuAffinityMask && vitaSecondaryThreadCpuAffinityMask)
+        sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), vitaSecondaryThreadCpuAffinityMask);
 #endif
     initializeCurrentThreadEvenIfNonWTFCreated();
 }
