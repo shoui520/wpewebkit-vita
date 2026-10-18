@@ -132,6 +132,7 @@ std::optional<DateComponents> MonthInputType::setMillisecondToDateComponents(dou
     return DateComponents::fromMonthsSinceEpoch(value);
 }
 
+#if !PLATFORM(VITA)
 void MonthInputType::handleDOMActivateEvent(Event&)
 {
 }
@@ -139,6 +140,7 @@ void MonthInputType::handleDOMActivateEvent(Event&)
 void MonthInputType::showPicker()
 {
 }
+#endif
 
 bool MonthInputType::isValidFormat(OptionSet<DateTimeFormatValidationResults> results) const
 {

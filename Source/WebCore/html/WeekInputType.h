@@ -55,8 +55,11 @@ private:
     StepRange createStepRange(AnyStepHandling) const final;
     std::optional<DateComponents> parseToDateComponents(StringView) const final;
     std::optional<DateComponents> setMillisecondToDateComponents(double) const final;
+#if !PLATFORM(VITA)
+    // The Vita shell has a picker for every date and time type.
     void handleDOMActivateEvent(Event&) final;
     void showPicker() final;
+#endif
 
     bool isValidFormat(OptionSet<DateTimeFormatValidationResults>) const final;
     String formatDateTimeFieldsState(const DateTimeFieldsState&) const final;

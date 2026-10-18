@@ -81,6 +81,7 @@ std::optional<DateComponents> WeekInputType::setMillisecondToDateComponents(doub
     return DateComponents::fromMillisecondsSinceEpochForWeek(value);
 }
 
+#if !PLATFORM(VITA)
 void WeekInputType::handleDOMActivateEvent(Event&)
 {
 }
@@ -88,6 +89,7 @@ void WeekInputType::handleDOMActivateEvent(Event&)
 void WeekInputType::showPicker()
 {
 }
+#endif
 
 bool WeekInputType::isValidFormat(OptionSet<DateTimeFormatValidationResults> results) const
 {

@@ -107,6 +107,7 @@ std::optional<DateComponents> TimeInputType::setMillisecondToDateComponents(doub
     return DateComponents::fromMillisecondsSinceMidnight(value);
 }
 
+#if !PLATFORM(VITA)
 void TimeInputType::handleDOMActivateEvent(Event&)
 {
 }
@@ -114,6 +115,7 @@ void TimeInputType::handleDOMActivateEvent(Event&)
 void TimeInputType::showPicker()
 {
 }
+#endif
 
 bool TimeInputType::isValidFormat(OptionSet<DateTimeFormatValidationResults> results) const
 {
