@@ -84,6 +84,7 @@ static constexpr auto platformMediaTypes = std::to_array<TypeExtensionPair>({
     { "video/mp4"_s, "mp4"_s },
     { "video/mp4"_s, "m4v"_s },
     { "video/ogg"_s, "ogv"_s },
+    { "video/quicktime"_s, "mov"_s },
     { "video/webm"_s, "webm"_s },
 });
 

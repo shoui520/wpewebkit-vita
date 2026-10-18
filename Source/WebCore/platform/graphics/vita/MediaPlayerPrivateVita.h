@@ -1,0 +1,178 @@
+/*
+ * Copyright (C) 2026 Vita port contributors.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#pragma once
+
+#if ENABLE(VIDEO) && PLATFORM(VITA)
+
+#include "MediaPlayerPrivate.h"
+#include "PlatformTimeRanges.h"
+#include "VideoPlaybackQualityMetrics.h"
+#include <wtf/MonotonicTime.h>
+#include <wtf/RunLoop.h>
+#include <wtf/ThreadSafeWeakPtr.h>
+
+typedef struct _cairo_surface cairo_surface_t;
+
+namespace WebCore {
+
+class MediaByteStream;
+class MediaAudioOutput;
+class NativeImage;
+struct PlayerEventTarget;
+
+// Plays MP4 files (H.264 video, AAC audio) with the system video player
+// library. The library reads the resource through WebCore's media loader in
+// byte ranges; decoded frames are converted to a Cairo image to paint, and
+// audio goes to a system audio port.
+class MediaPlayerPrivateVita final
+    : public MediaPlayerPrivateInterface
+    , public ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr<MediaPlayerPrivateVita, WTF::DestructionThread::Main> {
+    WTF_MAKE_TZONE_ALLOCATED(MediaPlayerPrivateVita);
+public:
+    explicit MediaPlayerPrivateVita(MediaPlayer&);
+    ~MediaPlayerPrivateVita();
+
+    void ref() const final { ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr::ref(); }
+    void deref() const final { ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr::deref(); }
+
+    static void registerMediaEngine(MediaEngineRegistrar);
+    static MediaPlayer::SupportsType supportsType(const MediaEngineSupportParameters&);
+    static void getSupportedTypes(HashSet<String>&);
+
+    // A player state event, delivered on the main thread.
+    void playerEvent(int32_t event, unsigned generation);
+
+private:
+    constexpr MediaPlayerType mediaPlayerType() const final { return MediaPlayerType::Vita; }
+
+    void load(const String&) final;
+    void cancelLoad() final;
+    void prepareToPlay() final;
+    void setPreload(MediaPlayer::Preload) final;
+
+    void play() final;
+    void pause() final;
+    bool paused() const final { return m_paused; }
+    bool ended() const final { return m_ended; }
+
+    FloatSize naturalSize() const final { return m_naturalSize; }
+    bool hasVideo() const final { return m_hasVideo; }
+    bool hasAudio() const final { return m_hasAudio; }
+    // The element goes fullscreen; the frames paint as usual.
+    bool supportsFullscreen() const final { return true; }
+    void setPageIsVisible(bool) final { }
+
+    MediaTime duration() const final;
+    MediaTime currentTime() const final;
+    void seekToTarget(const SeekTarget&) final;
+    bool seeking() const final { return m_seeking; }
+    double rate() const final { return m_paused ? 0 : 1; }
+
+    void setVolume(float) final;
+    void setMuted(bool) final;
+
+    MediaPlayer::NetworkState networkState() const final { return m_networkState; }
+    String errorMessage() const final { return m_errorMessage; }
+    MediaPlayer::ReadyState readyState() const final { return m_readyState; }
+    MediaTime maxTimeSeekable() const final { return m_duration.isValid() ? m_duration : MediaTime::zeroTime(); }
+    const PlatformTimeRanges& buffered() const final;
+    unsigned long long totalBytes() const final;
+    bool didLoadingProgress() const final;
+    std::optional<VideoPlaybackQualityMetrics> videoPlaybackQualityMetrics() final;
+
+    void paint(GraphicsContext&, const FloatRect&) final;
+    RefPtr<NativeImage> nativeImageForCurrentTime() final;
+    DestinationColorSpace colorSpace() final;
+
+    void createPlayer();
+    void destroyPlayer();
+    void playerReady();
+    void startPlayback();
+    void showFirstFrame();
+    void reachedEnd();
+    void fail(MediaPlayer::NetworkState, const String& message = { });
+    void setNetworkState(MediaPlayer::NetworkState);
+    void setReadyState(MediaPlayer::ReadyState);
+    void updateFrame();
+    void finishSeek();
+    void applyVolume();
+
+    ThreadSafeWeakPtr<MediaPlayer> m_player;
+    URL m_url;
+    String m_errorMessage;
+    MediaPlayer::NetworkState m_networkState { MediaPlayer::NetworkState::Empty };
+    MediaPlayer::ReadyState m_readyState { MediaPlayer::ReadyState::HaveNothing };
+
+    // The library's player; its events carry the generation they belong to.
+    // The system player's handle, 0 when there is none.
+    int m_handle { 0 };
+    // Frames shown, and frames the library decoded that were never fetched,
+    // judged by gaps in the timestamps of those that were.
+    uint32_t m_presentedFrames { 0 };
+    uint32_t m_droppedFrames { 0 };
+    std::optional<uint64_t> m_lastFrameTime;
+    // The smallest step seen between frame timestamps, in milliseconds.
+    uint64_t m_frameInterval { 0 };
+    unsigned m_generation { 0 };
+    RefPtr<MediaByteStream> m_stream;
+    std::unique_ptr<PlayerEventTarget> m_eventTarget;
+    RefPtr<MediaAudioOutput> m_audio;
+    bool m_waitingForPreload { false };
+    bool m_ready { false };
+    bool m_started { false };
+    bool m_paused { true };
+    bool m_ended { false };
+    bool m_seeking { false };
+    // Started, to be paused at the first frame so a paused video shows it.
+    bool m_showingFirstFrame { false };
+    MonotonicTime m_firstFrameStarted;
+    // Where playback resumes when a new player has to be made (after the end).
+    MediaTime m_startTime { MediaTime::zeroTime() };
+    MediaTime m_seekTarget;
+    MonotonicTime m_seekStarted;
+    MediaTime m_duration { MediaTime::invalidTime() };
+    bool m_hasVideo { false };
+    bool m_hasAudio { false };
+    FloatSize m_naturalSize;
+    float m_volume { 1 };
+    bool m_muted { false };
+    mutable unsigned long long m_lastReportedBytes { 0 };
+    mutable PlatformTimeRanges m_buffered;
+
+    // The latest frame, converted (at half size while shown that small).
+    RefPtr<cairo_surface_t> m_frame;
+    RefPtr<NativeImage> m_frameImage;
+    // The size of the last paint, in device pixels, and when a canvas last
+    // asked for the frame.
+    FloatSize m_paintedSize;
+    MonotonicTime m_lastImageRequest;
+    RunLoop::Timer m_frameTimer;
+    RunLoop::Timer m_readyTimeout;
+};
+
+} // namespace WebCore
+
+#endif // ENABLE(VIDEO) && PLATFORM(VITA)

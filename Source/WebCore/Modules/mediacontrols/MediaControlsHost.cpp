@@ -136,7 +136,7 @@ String MediaControlsHost::layoutTraitsClassName() const
     return "VisionLayoutTraits"_s;
 #elif PLATFORM(WATCHOS)
     return "WatchOSLayoutTraits"_s;
-#elif USE(THEME_ADWAITA)
+#elif USE(THEME_ADWAITA) || PLATFORM(VITA)
     return "AdwaitaLayoutTraits"_s;
 #else
     ASSERT_NOT_REACHED();

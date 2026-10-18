@@ -106,6 +106,11 @@
 #include "MediaPlayerPrivateHolePunch.h"
 #endif
 
+#if PLATFORM(VITA)
+#include "vita/MediaPlayerPrivateVita.h"
+#include "vita/MediaPlayerPrivateVitaAudio.h"
+#endif
+
 #if ENABLE(WIRELESS_PLAYBACK_MEDIA_PLAYER)
 #include "MediaDeviceRouteController.h"
 #include "MediaPlayerPrivateWirelessPlayback.h"
@@ -382,6 +387,11 @@ static void buildMediaEnginesVector() WTF_REQUIRES_LOCK(mediaEngineVectorLock)
 
 #if USE(EXTERNAL_HOLEPUNCH)
     MediaPlayerPrivateHolePunch::registerMediaEngine(addMediaEngine);
+#endif
+
+#if PLATFORM(VITA)
+    MediaPlayerPrivateVita::registerMediaEngine(addMediaEngine);
+    MediaPlayerPrivateVitaAudio::registerMediaEngine(addMediaEngine);
 #endif
 
 #if ENABLE(WIRELESS_PLAYBACK_MEDIA_PLAYER)

@@ -34,6 +34,7 @@
 
 #if !PLATFORM(COCOA) && !USE(GSTREAMER)
 #include "ImageOrientation.h"
+#include "NativeImage.h"
 #endif
 
 namespace WebCore {
