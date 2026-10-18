@@ -55,6 +55,10 @@ RefPtr<FcPattern> FontSetCache::bestForCharacters(const FontDescription& fontDes
         if (!FontCache::configurePatternForFontDescription(pattern.get(), fontDescription))
             return nullptr;
 
+        // Han characters are shared between languages; prefer the fonts written for the content's language.
+        if (auto& locale = fontDescription.computedLocale(); !locale.isEmpty())
+            FcPatternAddString(pattern.get(), FC_LANG, reinterpret_cast<const FcChar8*>(locale.string().convertToASCIILowercase().utf8().data()));
+
         FcConfigSubstitute(nullptr, pattern.get(), FcMatchPattern);
         cairo_ft_font_options_substitute(getDefaultCairoFontOptions(), pattern.get());
         FcDefaultSubstitute(pattern.get());
