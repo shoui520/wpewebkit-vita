@@ -8,6 +8,7 @@ list(APPEND WebCore_PRIVATE_LIBRARIES OpenSSL::Crypto)
 list(APPEND WebCore_SOURCES
     accessibility/playstation/AccessibilityObjectPlayStation.cpp
     accessibility/vita/AXObjectCacheVita.cpp
+    dom/glib/PointerEventGLib.cpp
     editing/vita/EditorVita.cpp
     platform/generic/KeyedDecoderGeneric.cpp
     platform/generic/KeyedEncoderGeneric.cpp
