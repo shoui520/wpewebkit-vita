@@ -41,7 +41,10 @@
 #include <wtf/Assertions.h>
 #include <wtf/HashFunctions.h>
 #include <wtf/HashMap.h>
+#include <wtf/Lock.h>
+#include <wtf/NeverDestroyed.h>
 #include <wtf/text/CString.h>
+#include <wtf/text/MakeString.h>
 
 #if PLATFORM(GTK) || (PLATFORM(WPE) && ENABLE(WPE_PLATFORM))
 #include "SystemSettings.h"
@@ -364,7 +367,7 @@ static inline bool isCommonlyUsedGenericFamily(const String& familyNameString)
         || equalLettersIgnoringASCIICase(familyNameString, "cursive"_s);
 }
 
-std::unique_ptr<FontPlatformData> FontCache::createFontPlatformData(const FontDescription& fontDescription, const AtomString& family, const FontCreationContext& fontCreationContext, OptionSet<FontLookupOptions> options)
+static RefPtr<FcPattern> matchFontPattern(const String& familyNameString, const FontDescription& fontDescription)
 {
     // The CSS font matching algorithm (http://www.w3.org/TR/css3-fonts/#font-matching-algorithm)
     // says that we must find an exact match for font family, slant (italic or oblique can be used)
@@ -375,11 +378,10 @@ std::unique_ptr<FontPlatformData> FontCache::createFontPlatformData(const FontDe
 #if ENABLE(VARIATION_FONTS)
     FcPatternAddBool(pattern.get(), FC_VARIABLE, FcDontCare);
 #endif
-    String familyNameString(getFamilyNameStringFromFamily(family));
     if (!FcPatternAddString(pattern.get(), FC_FAMILY, reinterpret_cast<const FcChar8*>(familyNameString.utf8().data())))
         return nullptr;
 
-    if (!configurePatternForFontDescription(pattern.get(), fontDescription))
+    if (!FontCache::configurePatternForFontDescription(pattern.get(), fontDescription))
         return nullptr;
 
     // We do not normally allow fontconfig to substitute one font family for another, since this
@@ -434,6 +436,54 @@ std::unique_ptr<FontPlatformData> FontCache::createFontPlatformData(const FontDe
 #endif
 
     if (!matchedFontFamily)
+        return nullptr;
+
+    return resultPattern;
+}
+
+#if PLATFORM(VITA)
+// Matching is most of the cost of creating a font, and pages ask for each
+// family in many sizes. The port's fonts are all scalable and its configuration
+// has no size-dependent rules, so a match is kept per family, slant and weight,
+// and copies of it get the requested size.
+static RefPtr<FcPattern> matchFontPatternIgnoringSize(const String& familyNameString, const FontDescription& fontDescription)
+{
+    static Lock lock;
+    static NeverDestroyed<HashMap<String, RefPtr<FcPattern>>> matches;
+    auto key = makeString(familyNameString, '\n', fontDescription.fontStyleSlope() ? 1 : 0, '\n', fontWeightToFontconfigWeight(fontDescription.weight()));
+    RefPtr<FcPattern> match;
+    {
+        Locker locker { lock };
+        match = matches->ensure(key, [&] {
+            return matchFontPattern(familyNameString, fontDescription);
+        }).iterator->value;
+    }
+    if (!match)
+        return nullptr;
+
+    RefPtr<FcPattern> pattern = adoptRef(FcPatternDuplicate(match.get()));
+    double pixelSize = fontDescription.computedSize();
+    double matchedPixelSize, matchedSize;
+    if (FcPatternGetDouble(match.get(), FC_PIXEL_SIZE, 0, &matchedPixelSize) == FcResultMatch && matchedPixelSize > 0
+        && FcPatternGetDouble(match.get(), FC_SIZE, 0, &matchedSize) == FcResultMatch) {
+        FcPatternDel(pattern.get(), FC_SIZE);
+        FcPatternAddDouble(pattern.get(), FC_SIZE, matchedSize * pixelSize / matchedPixelSize);
+    }
+    FcPatternDel(pattern.get(), FC_PIXEL_SIZE);
+    FcPatternAddDouble(pattern.get(), FC_PIXEL_SIZE, pixelSize);
+    return pattern;
+}
+#endif
+
+std::unique_ptr<FontPlatformData> FontCache::createFontPlatformData(const FontDescription& fontDescription, const AtomString& family, const FontCreationContext& fontCreationContext, OptionSet<FontLookupOptions> options)
+{
+    String familyNameString(getFamilyNameStringFromFamily(family));
+#if PLATFORM(VITA)
+    RefPtr<FcPattern> resultPattern = matchFontPatternIgnoringSize(familyNameString, fontDescription);
+#else
+    RefPtr<FcPattern> resultPattern = matchFontPattern(familyNameString, fontDescription);
+#endif
+    if (!resultPattern)
         return nullptr;
 
     bool fixedWidth, syntheticBold, syntheticOblique;
