@@ -479,6 +479,7 @@ void deleteAllFilesModifiedSince(const String& directory, WallTime time)
 
 #if HAVE(STD_FILESYSTEM) || HAVE(STD_EXPERIMENTAL_FILESYSTEM)
 
+#if !OS(VITA)
 bool deleteEmptyDirectory(const String& path)
 {
     std::error_code ec;
@@ -506,8 +507,9 @@ bool deleteEmptyDirectory(const String& path)
     // remove() returns false on error so no need to check ec.
     return std::filesystem::remove(fsPath, ec);
 }
+#endif
 
-#if !PLATFORM(PLAYSTATION)
+#if !PLATFORM(PLAYSTATION) && !OS(VITA)
 bool moveFile(const String& oldPath, const String& newPath)
 {
     auto fsOldPath = toStdFileSystemPath(oldPath);
@@ -539,6 +541,7 @@ std::optional<uint64_t> fileSize(const String& path)
     return size;
 }
 
+#if !OS(VITA)
 std::optional<uint64_t> directorySize(const String& path)
 {
     if (path.isEmpty())
@@ -564,6 +567,7 @@ std::optional<uint64_t> directorySize(const String& path)
 
     return size;
 }
+#endif
 
 #if !PLATFORM(PLAYSTATION)
 std::optional<uint64_t> volumeFreeSpace(const String& path)
@@ -630,7 +634,7 @@ std::optional<uint64_t> hardLinkCount(const String& path)
     return ec ? std::nullopt : std::make_optional(linkCount);
 }
 
-#if !PLATFORM(PLAYSTATION)
+#if !PLATFORM(PLAYSTATION) && !OS(VITA)
 bool deleteNonEmptyDirectory(const String& path)
 {
     std::error_code ec;
@@ -748,7 +752,7 @@ String realPath(const String& path)
 }
 #endif
 
-#if !PLATFORM(PLAYSTATION)
+#if !PLATFORM(PLAYSTATION) && !OS(VITA)
 Vector<String> listDirectory(const String& path)
 {
     Vector<String> fileNames;
@@ -772,6 +776,7 @@ bool fileExists(const String& path)
     return std::filesystem::exists(toStdFileSystemPath(path), ec);
 }
 
+#if !OS(VITA)
 bool deleteFile(const String& path)
 {
     std::error_code ec;
@@ -791,6 +796,7 @@ bool makeAllDirectories(const String& path)
     std::filesystem::create_directories(toStdFileSystemPath(path), ec);
     return !ec;
 }
+#endif
 
 String pathByAppendingComponent(StringView path, StringView component)
 {

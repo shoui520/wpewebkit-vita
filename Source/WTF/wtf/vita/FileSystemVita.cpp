@@ -28,9 +28,12 @@
 
 #include <array>
 #include <cstdlib>
+#include <psp2/io/dirent.h>
 #include <psp2/io/fcntl.h>
+#include <psp2/io/stat.h>
 #include <sys/syslimits.h>
 #include <unistd.h>
+#include <wtf/CheckedArithmetic.h>
 #include <wtf/CryptographicallyRandomNumber.h>
 #include <wtf/FileHandle.h>
 #include <wtf/text/CString.h>
@@ -141,6 +144,137 @@ std::pair<String, FileHandle> openTemporaryFile(StringView prefix, StringView su
             return { };
     }
     return { };
+}
+
+// The runtime's std::filesystem cannot create or read directories: these use
+// the native calls.
+
+static std::optional<SceIoStat> nativeStat(const CString& path)
+{
+    SceIoStat stat;
+    if (sceIoGetstat(path.data(), &stat) < 0)
+        return std::nullopt;
+    return stat;
+}
+
+bool makeAllDirectories(const String& path)
+{
+    auto representation = nativePath(path);
+    if (representation.isNull())
+        return false;
+    auto full = representation.span();
+    // Every prefix that ends a component after the device name ("ux0:").
+    size_t device = std::string_view(full.data(), full.size()).find(':');
+    size_t start = device == std::string_view::npos ? 0 : device + 1;
+    for (size_t end = start; end <= full.size(); ++end) {
+        if (end < full.size() && full[end] != '/')
+            continue;
+        if (end == start || full[end - 1] == '/')
+            continue;
+        CString prefix(full.first(end));
+        if (sceIoMkdir(prefix.data(), 0777) >= 0)
+            continue;
+        auto stat = nativeStat(prefix);
+        if (!stat || !SCE_S_ISDIR(stat->st_mode))
+            return false;
+    }
+    return true;
+}
+
+Vector<String> listDirectory(const String& path)
+{
+    Vector<String> names;
+    auto representation = nativePath(path);
+    if (representation.isNull())
+        return names;
+    SceUID directory = sceIoDopen(representation.data());
+    if (directory < 0)
+        return names;
+    SceIoDirent entry;
+    while (true) {
+        zeroBytes(entry);
+        if (sceIoDread(directory, &entry) <= 0)
+            break;
+        auto name = String::fromUTF8(entry.d_name);
+        if (!name.isEmpty() && name != "."_s && name != ".."_s)
+            names.append(WTF::move(name));
+    }
+    sceIoDclose(directory);
+    return names;
+}
+
+bool deleteFile(const String& path)
+{
+    auto representation = nativePath(path);
+    if (representation.isNull())
+        return false;
+    auto stat = nativeStat(representation);
+    if (!stat || SCE_S_ISDIR(stat->st_mode))
+        return false;
+    return sceIoRemove(representation.data()) >= 0;
+}
+
+bool deleteEmptyDirectory(const String& path)
+{
+    auto representation = nativePath(path);
+    return !representation.isNull() && sceIoRmdir(representation.data()) >= 0;
+}
+
+bool deleteNonEmptyDirectory(const String& path)
+{
+    auto representation = nativePath(path);
+    if (representation.isNull())
+        return false;
+    for (auto& name : listDirectory(path)) {
+        auto child = pathByAppendingComponent(path, name);
+        auto childRepresentation = nativePath(child);
+        auto stat = nativeStat(childRepresentation);
+        if (stat && SCE_S_ISDIR(stat->st_mode))
+            deleteNonEmptyDirectory(child);
+        else
+            sceIoRemove(childRepresentation.data());
+    }
+    return sceIoRmdir(representation.data()) >= 0;
+}
+
+bool moveFile(const String& oldPath, const String& newPath)
+{
+    auto from = nativePath(oldPath);
+    auto to = nativePath(newPath);
+    if (from.isNull() || to.isNull())
+        return false;
+    if (sceIoRename(from.data(), to.data()) >= 0)
+        return true;
+    // Unlike POSIX rename(), the native call does not replace an existing file.
+    auto stat = nativeStat(to);
+    if (!stat || SCE_S_ISDIR(stat->st_mode) || sceIoRemove(to.data()) < 0)
+        return false;
+    return sceIoRename(from.data(), to.data()) >= 0;
+}
+
+std::optional<uint64_t> directorySize(const String& path)
+{
+    auto representation = nativePath(path);
+    auto stat = representation.isNull() ? std::nullopt : nativeStat(representation);
+    if (!stat || !SCE_S_ISDIR(stat->st_mode))
+        return std::nullopt;
+    CheckedUint64 size = 0;
+    for (auto& name : listDirectory(path)) {
+        auto child = pathByAppendingComponent(path, name);
+        auto childStat = nativeStat(nativePath(child));
+        if (!childStat)
+            return std::nullopt;
+        if (SCE_S_ISDIR(childStat->st_mode)) {
+            auto childSize = directorySize(child);
+            if (!childSize)
+                return std::nullopt;
+            size += *childSize;
+        } else
+            size += static_cast<uint64_t>(childStat->st_size);
+        if (size.hasOverflowed())
+            return std::nullopt;
+    }
+    return size.value();
 }
 
 } // namespace WTF::FileSystemImpl
