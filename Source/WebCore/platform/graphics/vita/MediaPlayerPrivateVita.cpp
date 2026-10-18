@@ -220,7 +220,7 @@ static void playerEventCallback(void* target, int32_t event, int32_t, void*)
     });
 }
 
-// Frames from the decoder are NV21: a luma plane, then interleaved V and U at
+// Frames from the decoder are NV12: a luma plane, then interleaved U and V at
 // half resolution. They become Cairo's premultiplied BGRA with the limited
 // range BT.601 or BT.709 matrix in 6-bit fixed point.
 struct YUVMatrix {
@@ -265,14 +265,14 @@ static void convertFrame(const uint8_t* frame, unsigned width, unsigned height, 
     const uint8x8_t offset128 = vdup_n_u8(128);
     unsigned vectorWidth = width & ~15u;
     for (unsigned row = 0; row < height; row += 2) {
-        const uint8_t* vu = chroma + (row / 2) * stride;
+        const uint8_t* uv = chroma + (row / 2) * stride;
         for (unsigned line = row; line < std::min(row + 2, height); ++line) {
             const uint8_t* luma = frame + line * stride;
             uint8_t* out = output + line * outputStride;
             for (unsigned x = 0; x < vectorWidth; x += 16) {
-                uint8x8x2_t pairs = vld2_u8(vu + x);
-                int16x8_t v = vreinterpretq_s16_u16(vsubl_u8(pairs.val[0], offset128));
-                int16x8_t u = vreinterpretq_s16_u16(vsubl_u8(pairs.val[1], offset128));
+                uint8x8x2_t pairs = vld2_u8(uv + x);
+                int16x8_t u = vreinterpretq_s16_u16(vsubl_u8(pairs.val[0], offset128));
+                int16x8_t v = vreinterpretq_s16_u16(vsubl_u8(pairs.val[1], offset128));
                 // Each chroma sample covers two pixels.
                 int16x8x2_t red = vzipq_s16(vmulq_n_s16(v, matrix.rv), vmulq_n_s16(v, matrix.rv));
                 int16x8_t greenTerm = vmlsq_n_s16(vmulq_n_s16(u, -matrix.gu), v, matrix.gv);
@@ -283,7 +283,7 @@ static void convertFrame(const uint8_t* frame, unsigned width, unsigned height, 
                 storePixels(matrix, vget_high_u8(y), red.val[1], green.val[1], blue.val[1], out + (x + 8) * 4);
             }
             for (unsigned x = vectorWidth; x < width; ++x)
-                storePixel(matrix, luma[x], vu[(x & ~1u) + 1] - 128, vu[x & ~1u] - 128, out + x * 4);
+                storePixel(matrix, luma[x], uv[x & ~1u] - 128, uv[(x & ~1u) + 1] - 128, out + x * 4);
         }
     }
     cairo_surface_mark_dirty(surface);
@@ -306,16 +306,16 @@ static void convertFrameAtHalfSize(const uint8_t* frame, unsigned width, unsigne
     for (unsigned row = 0; row < height / 2; ++row) {
         const uint8_t* top = frame + 2 * row * stride;
         const uint8_t* bottom = top + stride;
-        const uint8_t* vu = chroma + row * stride;
+        const uint8_t* uv = chroma + row * stride;
         uint8_t* out = output + row * outputStride;
         for (unsigned x = 0; x < vectorWidth; x += 16) {
             uint8x16x2_t topPairs = vld2q_u8(top + 2 * x);
             uint8x16x2_t bottomPairs = vld2q_u8(bottom + 2 * x);
             uint8x16_t y = vrhaddq_u8(vhaddq_u8(topPairs.val[0], topPairs.val[1]), vhaddq_u8(bottomPairs.val[0], bottomPairs.val[1]));
-            uint8x16x2_t pairs = vld2q_u8(vu + 2 * x);
+            uint8x16x2_t pairs = vld2q_u8(uv + 2 * x);
             for (int half = 0; half < 2; ++half) {
-                int16x8_t v = vreinterpretq_s16_u16(vsubl_u8(half ? vget_high_u8(pairs.val[0]) : vget_low_u8(pairs.val[0]), offset128));
-                int16x8_t u = vreinterpretq_s16_u16(vsubl_u8(half ? vget_high_u8(pairs.val[1]) : vget_low_u8(pairs.val[1]), offset128));
+                int16x8_t u = vreinterpretq_s16_u16(vsubl_u8(half ? vget_high_u8(pairs.val[0]) : vget_low_u8(pairs.val[0]), offset128));
+                int16x8_t v = vreinterpretq_s16_u16(vsubl_u8(half ? vget_high_u8(pairs.val[1]) : vget_low_u8(pairs.val[1]), offset128));
                 int16x8_t green = vmlsq_n_s16(vmulq_n_s16(u, -matrix.gu), v, matrix.gv);
                 storePixels(matrix, half ? vget_high_u8(y) : vget_low_u8(y), vmulq_n_s16(v, matrix.rv), green, vmulq_n_s16(u, matrix.bu), out + (x + half * 8) * 4);
             }
@@ -323,7 +323,7 @@ static void convertFrameAtHalfSize(const uint8_t* frame, unsigned width, unsigne
         for (unsigned x = vectorWidth; x < outputWidth; ++x) {
             // Rounded as the vector loop does.
             int luma = (((top[2 * x] + top[2 * x + 1]) >> 1) + ((bottom[2 * x] + bottom[2 * x + 1]) >> 1) + 1) >> 1;
-            storePixel(matrix, luma, vu[2 * x + 1] - 128, vu[2 * x] - 128, out + x * 4);
+            storePixel(matrix, luma, uv[2 * x] - 128, uv[2 * x + 1] - 128, out + x * 4);
         }
     }
     cairo_surface_mark_dirty(surface);
