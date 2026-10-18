@@ -36,6 +36,7 @@
 #include "FrameDestructionObserverInlines.h"
 #include "FrameInlines.h"
 #include "HitTestResult.h"
+#include "LocalFrameView.h"
 #include "MouseEventTypes.h"
 #include "NodeDocument.h"
 #include "Page.h"
@@ -276,6 +277,14 @@ void PointerCaptureController::dispatchEventForTouchAtIndex(EventTarget& target,
 
     Ref capturingData = ensureCapturingDataForPointerEvent(pointerEvent);
 
+    // https://w3c.github.io/pointerevents/#the-pointercancel-event
+    // A cancelled pointer, such as one the user agent took to pan the page, fires nothing more
+    // until it is pressed again.
+    if (pointerEvent->type() == eventNames().pointerdownEvent)
+        capturingData->state = CapturingData::State::Ready;
+    else if (capturingData->state == CapturingData::State::Cancelled)
+        return;
+
     // Check if the target changed, which would require dispatching boundary events.
     RefPtr<Element> previousTarget = capturingData->previousTarget;
     RefPtr<Element> currentTarget = downcast<Element>(&target);
@@ -333,9 +342,18 @@ void PointerCaptureController::dispatchEventForTouchAtIndex(EventTarget& target,
         dispatchEnterOrLeaveEvent(eventNames().pointerenterEvent, *currentTarget, platformTouchEvent, index, isPrimary, view, touchDelta);
     }
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(VITA)
+    // Cancelling marks the pointer, so it no longer counts as down: while a touch pointer is
+    // down, mouse events (such as the click a tap sends) get no pointer events.
     if (pointerEvent->type() == eventNames().pointercancelEvent) {
-        cancelPointer(pointerEvent->pointerId(), IntPoint(platformTouchEvent.touchLocationInRootViewAtIndex(index)), pointerEvent.ptr());
+#if PLATFORM(IOS_FAMILY)
+        IntPoint location { platformTouchEvent.touchLocationInRootViewAtIndex(index) };
+#else
+        IntPoint location = flooredIntPoint(platformTouchEvent.touchPoints()[index].pos());
+        if (RefPtr frame = page->localMainFrame(); frame && frame->view())
+            location = frame->view()->windowToContents(location);
+#endif
+        cancelPointer(pointerEvent->pointerId(), location, pointerEvent.ptr());
         return;
     }
 #endif

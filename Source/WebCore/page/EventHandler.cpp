@@ -5530,8 +5530,12 @@ Expected<bool, RemoteFrameGeometryTransformer> EventHandler::handleTouchEvent(co
         // If pointerdown was canceled via preventDefault(), suppress compatibility mouse events
         // by marking the touch event as handled. This propagates to the UIProcess via
         // doneWithTouchEvent(wasEventHandled=true), preventing gesture-based mouse synthesis.
+        // The Vita browser sends a tap's mouse events with the touch's pointer id instead, so
+        // the compatibility ones are suppressed when dispatched and the click still fires.
+#if !PLATFORM(VITA)
         if (page->pointerCaptureController().preventsCompatibilityMouseEventsForIdentifier(PointerEvent::pointerIdForTouchPoint(point)))
             swallowedEvent = true;
+#endif
 #endif
 
         // pagePoint should always be relative to the target elements containing frame.
