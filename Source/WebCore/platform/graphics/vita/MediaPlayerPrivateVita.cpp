@@ -118,6 +118,7 @@ void MediaAudioOutput::stop()
 void MediaAudioOutput::run()
 {
     int port = -1;
+    auto portType = SCE_AUDIO_OUT_PORT_TYPE_MAIN;
     unsigned portSamples = 0;
     unsigned portRate = 0;
     unsigned portChannels = 0;
@@ -134,12 +135,21 @@ void MediaAudioOutput::run()
         if (!samples || !rate)
             continue;
         auto mode = channels == 1 ? SCE_AUDIO_OUT_MODE_MONO : SCE_AUDIO_OUT_MODE_STEREO;
+        // The main port plays only 48 kHz; the BGM port takes the other rates
+        // (YouTube's AAC is 44.1 kHz, and played silent on the main port).
+        auto type = rate == 48000 ? SCE_AUDIO_OUT_PORT_TYPE_MAIN : SCE_AUDIO_OUT_PORT_TYPE_BGM;
+        if (port >= 0 && type != portType) {
+            sceAudioOutReleasePort(port);
+            port = -1;
+        }
         if (port < 0) {
-            port = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN, samples, rate, mode);
+            port = sceAudioOutOpenPort(type, samples, rate, mode);
             if (port < 0) {
                 sleep(100_ms);
                 continue;
             }
+            portType = type;
+            portVolume = -1;
         } else if (samples != portSamples || rate != portRate || channels != portChannels)
             sceAudioOutSetConfig(port, samples, rate, mode);
         portSamples = samples;
