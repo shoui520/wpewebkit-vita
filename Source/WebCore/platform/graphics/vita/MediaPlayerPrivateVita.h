@@ -77,6 +77,8 @@ private:
     void pause() final;
     bool paused() const final { return m_paused; }
     bool ended() const final { return m_ended; }
+    // The library loops looping media by itself.
+    void isLoopingChanged() final;
 
     FloatSize naturalSize() const final { return m_naturalSize; }
     bool hasVideo() const final { return m_hasVideo; }
@@ -107,8 +109,16 @@ private:
     RefPtr<NativeImage> nativeImageForCurrentTime() final;
     DestinationColorSpace colorSpace() final;
 
+    void loadIfDeferred();
     void createPlayer();
     void destroyPlayer();
+    bool wantsToPlay() const { return !m_paused || m_playRequested; }
+    bool acquireLibrary();
+    bool canGiveUpLibraryFor(const MediaPlayerPrivateVita&) const;
+    void giveUpLibrary();
+    void scheduleLibraryYield();
+    void yieldLibrary();
+    static void grantLibraryToNextWaiting();
     void playerReady();
     void startPlayback();
     void showFirstFrame();
@@ -141,6 +151,10 @@ private:
     std::unique_ptr<PlayerEventTarget> m_eventTarget;
     RefPtr<MediaAudioOutput> m_audio;
     bool m_waitingForPreload { false };
+    // Gave the library up to another player once loaded: a new player resumes at m_startTime.
+    bool m_suspended { false };
+    // Asked to play before it had data (prepareToPlay()).
+    bool m_playRequested { false };
     bool m_ready { false };
     bool m_started { false };
     bool m_paused { true };
@@ -149,7 +163,10 @@ private:
     // Started, to be paused at the first frame so a paused video shows it.
     bool m_showingFirstFrame { false };
     MonotonicTime m_firstFrameStarted;
-    // Where playback resumes when a new player has to be made (after the end).
+    // When playback last started or resumed.
+    MonotonicTime m_playbackStarted;
+    // Where playback resumes when a new player has to be made (after the end, or
+    // after giving the library up).
     MediaTime m_startTime { MediaTime::zeroTime() };
     MediaTime m_seekTarget;
     MonotonicTime m_seekStarted;

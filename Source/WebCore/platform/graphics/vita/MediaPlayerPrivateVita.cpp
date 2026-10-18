@@ -390,6 +390,20 @@ void MediaPlayerPrivateVita::registerMediaEngine(MediaEngineRegistrar registrar)
     registrar(makeUnique<MediaPlayerFactoryVita>());
 }
 
+// The library runs one player at a time: a second one in the process crashes it
+// (its file reading keeps state in the library's globals; discord.com has several
+// autoplaying videos). Playing takes the library from the player holding it, and
+// loading takes it from one that is paused with its first frame shown, or ended;
+// otherwise players wait for it in turn. Main thread only.
+static MediaPlayerPrivateVita* libraryHolder;
+static constexpr Seconds playbackBeforeYield = 2_s;
+
+static Vector<MediaPlayerPrivateVita*>& playersWaitingForLibrary()
+{
+    static NeverDestroyed<Vector<MediaPlayerPrivateVita*>> players;
+    return players;
+}
+
 MediaPlayerPrivateVita::MediaPlayerPrivateVita(MediaPlayer& player)
     : m_player(player)
     , m_frameTimer(RunLoop::mainSingleton(), "MediaPlayerPrivateVita::FrameTimer"_s, this, &MediaPlayerPrivateVita::updateFrame)
@@ -407,6 +421,8 @@ void MediaPlayerPrivateVita::load(const String& url)
     destroyPlayer();
     m_url = URL { url };
     m_errorMessage = { };
+    m_suspended = false;
+    m_playRequested = false;
     m_ready = false;
     m_ended = false;
     m_startTime = MediaTime::zeroTime();
@@ -423,6 +439,16 @@ void MediaPlayerPrivateVita::load(const String& url)
 
 void MediaPlayerPrivateVita::prepareToPlay()
 {
+    // Until it has data to play, the element asks for this rather than play().
+    m_playRequested = true;
+    if (playersWaitingForLibrary().contains(this))
+        createPlayer();
+    else
+        loadIfDeferred();
+}
+
+void MediaPlayerPrivateVita::loadIfDeferred()
+{
     if (!std::exchange(m_waitingForPreload, false))
         return;
     setNetworkState(MediaPlayer::NetworkState::Loading);
@@ -432,21 +458,112 @@ void MediaPlayerPrivateVita::prepareToPlay()
 void MediaPlayerPrivateVita::setPreload(MediaPlayer::Preload preload)
 {
     if (preload != MediaPlayer::Preload::None)
-        prepareToPlay();
+        loadIfDeferred();
 }
 
 void MediaPlayerPrivateVita::cancelLoad()
 {
     destroyPlayer();
     m_waitingForPreload = false;
+    m_suspended = false;
+    m_playRequested = false;
     setNetworkState(MediaPlayer::NetworkState::Idle);
+}
+
+bool MediaPlayerPrivateVita::acquireLibrary()
+{
+    auto& waiting = playersWaitingForLibrary();
+    if (libraryHolder && libraryHolder != this) {
+        if (!libraryHolder->canGiveUpLibraryFor(*this)) {
+            if (!waiting.contains(this))
+                waiting.append(this);
+            if (wantsToPlay()) {
+                // Asks again once the holder has played a while.
+                RunLoop::mainSingleton().dispatchAfter(libraryHolder->m_playbackStarted + playbackBeforeYield - MonotonicTime::now(), [weakThis = ThreadSafeWeakPtr { *this }] {
+                    RefPtr protectedThis = weakThis.get();
+                    if (protectedThis && protectedThis->wantsToPlay() && playersWaitingForLibrary().contains(protectedThis.get()))
+                        protectedThis->createPlayer();
+                });
+            }
+            return false;
+        }
+        RefPtr { libraryHolder }->giveUpLibrary();
+    }
+    waiting.removeFirst(this);
+    libraryHolder = this;
+    return true;
+}
+
+bool MediaPlayerPrivateVita::canGiveUpLibraryFor(const MediaPlayerPrivateVita& other) const
+{
+    bool settled = m_paused && (m_ended || (m_ready && !m_showingFirstFrame && !m_seeking));
+    if (!other.wantsToPlay())
+        return settled;
+    // Not to a player that was playing a moment ago either: pages that play a video
+    // again when it pauses would pass the library back and forth.
+    return settled || MonotonicTime::now() - m_playbackStarted >= playbackBeforeYield;
+}
+
+void MediaPlayerPrivateVita::giveUpLibrary()
+{
+    bool loaded = m_ready && !m_ended;
+    bool playing = !m_paused && !m_ended;
+    if (loaded)
+        m_startTime = currentTime();
+    // The player taking over holds it next.
+    libraryHolder = nullptr;
+    destroyPlayer();
+    if (!loaded) {
+        // Loads again in turn.
+        if (!m_ended && !m_waitingForPreload && m_networkState == MediaPlayer::NetworkState::Loading)
+            playersWaitingForLibrary().append(this);
+        return;
+    }
+    // Keeps its media's state and last frame; playing again makes a new player.
+    m_suspended = true;
+    if (playing) {
+        m_paused = true;
+        if (RefPtr player = m_player.get())
+            player->playbackStateChanged();
+    }
+}
+
+// Once paused with a frame to show, or ended, the holder lets a waiting player load.
+void MediaPlayerPrivateVita::scheduleLibraryYield()
+{
+    if (libraryHolder != this || playersWaitingForLibrary().isEmpty())
+        return;
+    callOnMainThread([weakThis = ThreadSafeWeakPtr { *this }] {
+        if (RefPtr protectedThis = weakThis.get())
+            protectedThis->yieldLibrary();
+    });
+}
+
+void MediaPlayerPrivateVita::yieldLibrary()
+{
+    auto& waiting = playersWaitingForLibrary();
+    if (libraryHolder != this || waiting.isEmpty() || !canGiveUpLibraryFor(*waiting.first()))
+        return;
+    giveUpLibrary();
+    grantLibraryToNextWaiting();
+}
+
+void MediaPlayerPrivateVita::grantLibraryToNextWaiting()
+{
+    auto& waiting = playersWaitingForLibrary();
+    while (!libraryHolder && !waiting.isEmpty()) {
+        RefPtr next = waiting[0];
+        waiting.removeAt(0);
+        next->createPlayer();
+    }
 }
 
 void MediaPlayerPrivateVita::createPlayer()
 {
     RefPtr player = m_player.get();
-    if (!player || m_handle)
+    if (!player || m_handle || !acquireLibrary())
         return;
+    m_suspended = false;
     static int moduleResult = sceSysmoduleLoadModule(SCE_SYSMODULE_AVPLAYER);
     if (moduleResult < 0) {
         fail(MediaPlayer::NetworkState::DecodeError, makeString("The system video player could not be loaded (0x"_s, hex(static_cast<uint32_t>(moduleResult), 8), ')'));
@@ -484,6 +601,7 @@ void MediaPlayerPrivateVita::createPlayer()
         fail(MediaPlayer::NetworkState::FormatError, makeString("The system video player did not accept the media (0x"_s, hex(static_cast<uint32_t>(result), 8), ')'));
         return;
     }
+    sceAvPlayerSetLooping(m_handle, player->isLooping());
     m_readyTimeout.startOneShot(60_s);
 }
 
@@ -500,6 +618,11 @@ void MediaPlayerPrivateVita::destroyPlayer()
         sceAvPlayerStop(m_handle);
         sceAvPlayerClose(m_handle);
         m_handle = 0;
+    }
+    playersWaitingForLibrary().removeFirst(this);
+    if (libraryHolder == this) {
+        libraryHolder = nullptr;
+        callOnMainThread(grantLibraryToNextWaiting);
     }
     m_eventTarget = nullptr;
     m_stream = nullptr;
@@ -581,6 +704,8 @@ void MediaPlayerPrivateVita::playerReady()
         startPlayback();
     else if (m_hasVideo)
         showFirstFrame();
+    else
+        scheduleLibraryYield();
 }
 
 void MediaPlayerPrivateVita::showFirstFrame()
@@ -601,6 +726,7 @@ void MediaPlayerPrivateVita::startPlayback()
     if (!m_ready || !m_handle)
         return;
     m_showingFirstFrame = false;
+    m_playbackStarted = MonotonicTime::now();
     if (!m_started) {
         m_started = true;
         sceAvPlayerStart(m_handle);
@@ -628,7 +754,9 @@ void MediaPlayerPrivateVita::play()
         destroyPlayer();
         createPlayer();
     } else if (m_waitingForPreload)
-        prepareToPlay();
+        loadIfDeferred();
+    else if (m_suspended || playersWaitingForLibrary().contains(this))
+        createPlayer();
     else
         startPlayback();
     if (RefPtr player = m_player.get())
@@ -640,11 +768,13 @@ void MediaPlayerPrivateVita::pause()
     if (m_paused)
         return;
     m_paused = true;
+    m_playRequested = false;
     if (m_started && m_handle)
         sceAvPlayerPause(m_handle);
     m_frameTimer.stop();
     if (RefPtr player = m_player.get())
         player->playbackStateChanged();
+    scheduleLibraryYield();
 }
 
 MediaTime MediaPlayerPrivateVita::duration() const
@@ -750,6 +880,7 @@ void MediaPlayerPrivateVita::updateFrame()
     if (m_showingFirstFrame && (newFrame || MonotonicTime::now() - m_firstFrameStarted > 3_s)) {
         m_showingFirstFrame = false;
         sceAvPlayerPause(m_handle);
+        scheduleLibraryYield();
     }
     // The library goes inactive at the end of the media.
     if (m_started && !m_paused && !m_seeking && !sceAvPlayerIsActive(m_handle)) {
@@ -766,19 +897,30 @@ void MediaPlayerPrivateVita::updateFrame()
         m_frameTimer.stop();
 }
 
+void MediaPlayerPrivateVita::isLoopingChanged()
+{
+    if (RefPtr player = m_player.get(); player && m_handle)
+        sceAvPlayerSetLooping(m_handle, player->isLooping());
+}
+
 void MediaPlayerPrivateVita::reachedEnd()
 {
     if (m_ended)
         return;
     m_ended = true;
-    m_paused = true;
+    RefPtr player = m_player.get();
+    // A looping element seeks back to the start and plays on (when the library did
+    // not loop by itself); reported paused, the element would pause first.
+    if (!player || !player->isLooping())
+        m_paused = true;
     m_frameTimer.stop();
     if (RefPtr audio = std::exchange(m_audio, nullptr))
         audio->stop();
-    if (RefPtr player = m_player.get()) {
+    if (player) {
         player->timeChanged();
         player->playbackStateChanged();
     }
+    scheduleLibraryYield();
 }
 
 void MediaPlayerPrivateVita::fail(MediaPlayer::NetworkState state, const String& message)
