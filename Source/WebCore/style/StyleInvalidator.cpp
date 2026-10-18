@@ -29,6 +29,7 @@
 #include "CSSKeyframesRule.h"
 #include "Document.h"
 #include "ElementChildIteratorInlines.h"
+#include "ElementInlines.h"
 #include "ElementRareData.h"
 #include "ElementRuleCollector.h"
 #include "HTMLSlotElement.h"
@@ -319,6 +320,99 @@ void Invalidator::invalidateStyle(Element& element)
     invalidateStyleForTree(element, nullptr);
 }
 
+// Collects the compound selectors whose :has() takes HAS_ARGUMENT (the anchors). Fails if such a :has() is
+// nested in another pseudo-class, as in :not(:has(.changed)) .subject, or if there is none.
+static bool collectHasAnchors(const CSSSelector& complexSelector, const CSSSelector& hasArgument, bool isNested, Vector<const CSSSelector*, 8>& anchors, bool& found)
+{
+    auto* lastInCompound = &complexSelector;
+    for (auto* simpleSelector = &complexSelector; simpleSelector; simpleSelector = simpleSelector->precedingInComplexSelector()) {
+        if (auto* selectorList = simpleSelector->selectorList()) {
+            bool isHas = simpleSelector->match() == CSSSelector::Match::PseudoClass && simpleSelector->pseudoClass() == CSSSelector::PseudoClass::Has;
+            for (auto& subSelector : *selectorList) {
+                if (!isHas) {
+                    if (!collectHasAnchors(subSelector, hasArgument, true, anchors, found))
+                        return false;
+                    continue;
+                }
+                if (!complexSelectorsEqual(subSelector, hasArgument))
+                    continue;
+                if (isNested)
+                    return false;
+                anchors.appendIfNotContains(lastInCompound);
+                found = true;
+            }
+        }
+        if (simpleSelector->relation() != CSSSelector::Relation::Subselector)
+            lastInCompound = simpleSelector->precedingInComplexSelector();
+    }
+    return isNested || found;
+}
+
+// Whether the element can match the compound selector, judging by its tag, id and class selectors only.
+static bool mayMatchCompound(const CSSSelector& lastInCompound, const Element& element)
+{
+    bool inQuirksMode = element.document().inQuirksMode();
+    for (auto* simpleSelector = &lastInCompound; simpleSelector; simpleSelector = simpleSelector->precedingInCompound()) {
+        switch (simpleSelector->match()) {
+        case CSSSelector::Match::Tag: {
+            auto& localName = simpleSelector->tagQName().localName();
+            if (localName != starAtom() && !equalIgnoringASCIICase(localName, element.localName()))
+                return false;
+            break;
+        }
+        case CSSSelector::Match::Id:
+            if (!inQuirksMode && element.getIdAttribute() != simpleSelector->value())
+                return false;
+            break;
+        case CSSSelector::Match::Class:
+            if (!inQuirksMode && !element.hasClassName(simpleSelector->value()))
+                return false;
+            break;
+        default:
+            break;
+        }
+    }
+    return true;
+}
+
+// For :has(.changed) .subject, the element matching the :has() compound (the anchor) is an ancestor of the changed
+// element, or a previous sibling of it or of an ancestor; scope breaking :has() arguments are handled separately.
+// The subject is a descendant or following sibling of the anchor, or a descendant of such a sibling, so only the
+// subtree of the topmost possible anchor's parent needs to be checked.
+static RefPtr<Element> hasNonSubjectInvalidationRoot(Element& element)
+{
+    RefPtr documentElement = element.document().documentElement();
+    if (element.isInShadowTree() || !element.isConnected())
+        return documentElement;
+
+    Vector<const CSSSelector*, 8> anchors;
+    for (auto& features : element.styleResolver().ruleSets().features().hasPseudoClassRules.values()) {
+        for (auto& feature : *features) {
+            if (feature.matchElement != MatchElement::HasNonSubject)
+                continue;
+            bool found = false;
+            if (!collectHasAnchors(feature.selector(), feature.invalidationSelector.first(), false, anchors, found))
+                return documentElement;
+        }
+    }
+
+    Vector<Element*, 32> elementAndAncestors;
+    for (RefPtr ancestor = &element; ancestor; ancestor = ancestor->parentElement())
+        elementAndAncestors.append(ancestor.get());
+
+    for (auto* elementOrAncestor : elementAndAncestors | std::views::reverse) {
+        for (RefPtr candidate = elementOrAncestor; candidate; candidate = candidate->previousElementSibling()) {
+            for (auto* anchor : anchors) {
+                if (mayMatchCompound(*anchor, *candidate)) {
+                    RefPtr parent = elementOrAncestor->parentElement();
+                    return parent ? parent : documentElement;
+                }
+            }
+        }
+    }
+    return nullptr;
+}
+
 void Invalidator::invalidateStyleWithMatchElement(Element& element, MatchElement matchElement)
 {
     switch (matchElement) {
@@ -472,8 +566,14 @@ void Invalidator::invalidateStyleWithMatchElement(Element& element, MatchElement
         }
         break;
     }
-    case MatchElement::HasNonSubject:
+    case MatchElement::HasNonSubject: {
         // :has(.changed) .subject
+        if (RefPtr root = hasNonSubjectInvalidationRoot(element)) {
+            SelectorMatchingState selectorMatchingState;
+            invalidateStyleForDescendants(*root, &selectorMatchingState);
+        }
+        break;
+    }
     case MatchElement::HasScopeBreaking: {
         // :has(:is(.changed .a))
         SelectorMatchingState selectorMatchingState;
