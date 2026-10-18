@@ -23,6 +23,7 @@
 
 #include "CairoUtilities.h"
 #include "FontCache.h"
+#include <wtf/Language.h>
 #include <wtf/text/CharacterProperties.h>
 
 namespace WebCore {
@@ -56,8 +57,15 @@ RefPtr<FcPattern> FontSetCache::bestForCharacters(const FontDescription& fontDes
             return nullptr;
 
         // Han characters are shared between languages; prefer the fonts written for the content's language.
-        if (auto& locale = fontDescription.computedLocale(); !locale.isEmpty())
-            FcPatternAddString(pattern.get(), FC_LANG, reinterpret_cast<const FcChar8*>(locale.string().convertToASCIILowercase().utf8().data()));
+#if PLATFORM(VITA)
+        // Content that does not say its language is taken to be in the system's: the
+        // configuration picks a font for each, and without a language the choice is arbitrary.
+        String language = fontDescription.computedLocale().isEmpty() ? defaultLanguage() : fontDescription.computedLocale().string();
+#else
+        String language = fontDescription.computedLocale().string();
+#endif
+        if (!language.isEmpty())
+            FcPatternAddString(pattern.get(), FC_LANG, reinterpret_cast<const FcChar8*>(language.convertToASCIILowercase().utf8().data()));
 
         FcConfigSubstitute(nullptr, pattern.get(), FcMatchPattern);
         cairo_ft_font_options_substitute(getDefaultCairoFontOptions(), pattern.get());
