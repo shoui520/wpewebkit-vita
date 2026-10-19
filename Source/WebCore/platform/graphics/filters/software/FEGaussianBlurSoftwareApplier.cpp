@@ -30,6 +30,7 @@
 #if HAVE(ARM_NEON_INTRINSICS)
 #include "FEGaussianBlurNEON.h"
 #endif
+#include "Filter.h"
 #include "GraphicsContext.h"
 #include "ImageBuffer.h"
 #include "PixelBuffer.h"
@@ -435,6 +436,99 @@ inline void FEGaussianBlurSoftwareApplier::applyPlatform(PixelBuffer& ioBuffer, 
     boxBlurGeneric(ioBuffer, tempBuffer, kernelSizeX, kernelSizeY, paintSize, isAlphaImage, edgeMode);
 }
 
+#if PLATFORM(VITA)
+// Large blurs run at a fraction of the resolution, as Skia's do: a box-filtered copy at 1/2,
+// 1/4 or 1/8 size that keeps a standard deviation of at least 4 pixels is blurred, then
+// scaled back up bilinearly. A 60 pixel blur of a 1636x1220 buffer took a second at full
+// size, most of it waiting on memory.
+static unsigned blurDownscale(FloatSize deviation)
+{
+    constexpr float minimumDeviation = 4;
+    float smaller = std::min(deviation.width(), deviation.height());
+    unsigned scale = 1;
+    while (scale < 8 && smaller / (2 * scale) >= minimumDeviation)
+        scale *= 2;
+    return scale;
+}
+
+// Pixels as two pairs of 16-bit lanes, so one integer operation works on two channels.
+static constexpr uint32_t evenChannels = 0x00ff00ff;
+
+static void downscaleBlurInput(const PixelBuffer& source, IntSize size, PixelBuffer& destination, IntSize scaledSize, unsigned scale)
+{
+    auto* sourcePixels = reinterpret_cast<const uint32_t*>(source.bytes().data());
+    auto* destinationPixels = reinterpret_cast<uint32_t*>(destination.bytes().data());
+    // The Cortex-A9 has no divide instruction.
+    unsigned scaleShift = WTF::fastLog2(scale);
+    Vector<uint32_t> evenSums(scaledSize.width());
+    Vector<uint32_t> oddSums(scaledSize.width());
+    for (int scaledY = 0; scaledY < scaledSize.height(); ++scaledY) {
+        evenSums.fill(0);
+        oddSums.fill(0);
+        int firstRow = scaledY * scale;
+        int rows = std::min<int>(scale, size.height() - firstRow);
+        for (int y = firstRow; y < firstRow + rows; ++y) {
+            auto* row = sourcePixels + y * size.width();
+            for (int x = 0; x < size.width(); ++x) {
+                uint32_t pixel = row[x];
+                evenSums[x >> scaleShift] += pixel & evenChannels;
+                oddSums[x >> scaleShift] += (pixel >> 8) & evenChannels;
+            }
+        }
+        auto* destinationRow = destinationPixels + scaledY * scaledSize.width();
+        for (int scaledX = 0; scaledX < scaledSize.width(); ++scaledX) {
+            unsigned count = rows * std::min<int>(scale, size.width() - scaledX * scale);
+            bool whole = count == scale * scale;
+            auto average = [&](uint32_t sums, unsigned shift) {
+                uint32_t sum = ((sums >> shift) & 0xffff) + count / 2;
+                return (whole ? sum >> (2 * scaleShift) : sum / count) << shift;
+            };
+            uint32_t even = average(evenSums[scaledX], 0) | average(evenSums[scaledX], 16);
+            uint32_t odd = average(oddSums[scaledX], 0) | average(oddSums[scaledX], 16);
+            destinationRow[scaledX] = even | (odd << 8);
+        }
+    }
+}
+
+// Mixes two pixels, weight in 256ths of the second.
+static inline uint32_t interpolatePixels(uint32_t first, uint32_t second, uint32_t weight)
+{
+    uint32_t even = (((first & evenChannels) * (256 - weight) + (second & evenChannels) * weight) >> 8) & evenChannels;
+    uint32_t odd = (((first >> 8) & evenChannels) * (256 - weight) + ((second >> 8) & evenChannels) * weight) & ~evenChannels;
+    return even | odd;
+}
+
+static void upscaleBlurResult(const PixelBuffer& source, IntSize scaledSize, PixelBuffer& destination, IntSize size, unsigned scale)
+{
+    auto* sourcePixels = reinterpret_cast<const uint32_t*>(source.bytes().data());
+    auto* destinationPixels = reinterpret_cast<uint32_t*>(destination.bytes().data());
+    // Where a pixel's center falls in the scaled image, in 256ths of a pixel.
+    auto position = [&](int coordinate, int limit, int& index, uint32_t& weight) {
+        int fixed = std::max(0, (2 * coordinate + 1 - static_cast<int>(scale)) * 128 / static_cast<int>(scale));
+        index = std::min(fixed >> 8, limit - 1);
+        weight = index == limit - 1 ? 0 : fixed & 255;
+    };
+    Vector<int> columns(size.width());
+    Vector<uint32_t> columnWeights(size.width());
+    for (int x = 0; x < size.width(); ++x)
+        position(x, scaledSize.width(), columns[x], columnWeights[x]);
+    Vector<uint32_t> row(scaledSize.width() + 1);
+    for (int y = 0; y < size.height(); ++y) {
+        int scaledY;
+        uint32_t rowWeight;
+        position(y, scaledSize.height(), scaledY, rowWeight);
+        auto* first = sourcePixels + scaledY * scaledSize.width();
+        auto* second = rowWeight ? first + scaledSize.width() : first;
+        for (int scaledX = 0; scaledX < scaledSize.width(); ++scaledX)
+            row[scaledX] = interpolatePixels(first[scaledX], second[scaledX], rowWeight);
+        row[scaledSize.width()] = row[scaledSize.width() - 1];
+        auto* destinationRow = destinationPixels + y * size.width();
+        for (int x = 0; x < size.width(); ++x)
+            destinationRow[x] = interpolatePixels(row[columns[x]], row[columns[x] + 1], columnWeights[x]);
+    }
+}
+#endif
+
 bool FEGaussianBlurSoftwareApplier::apply(const Filter& filter, std::span<const Ref<FilterImage>> inputs, FilterImage& result) const
 {
     Ref input = inputs[0];
@@ -451,6 +545,21 @@ bool FEGaussianBlurSoftwareApplier::apply(const Filter& filter, std::span<const 
     auto kernelSize = m_effect->calculateKernelSize(filter, { m_effect->stdDeviationX(), m_effect->stdDeviationY() });
 
     IntSize paintSize = result.absoluteImageRect().size();
+#if PLATFORM(VITA)
+    auto deviation = filter.scaledByFilterScale(filter.resolvedSize({ m_effect->stdDeviationX(), m_effect->stdDeviationY() }));
+    if (unsigned scale = blurDownscale(deviation); scale > 1 && m_effect->edgeMode() == EdgeModeType::None) {
+        IntSize scaledSize { static_cast<int>((paintSize.width() + scale - 1) / scale), static_cast<int>((paintSize.height() + scale - 1) / scale) };
+        auto scaledBuffer = destinationPixelBuffer->createScratchPixelBuffer(scaledSize);
+        auto scaledTempBuffer = destinationPixelBuffer->createScratchPixelBuffer(scaledSize);
+        if (!scaledBuffer || !scaledTempBuffer)
+            return false;
+        downscaleBlurInput(*destinationPixelBuffer, paintSize, *scaledBuffer, scaledSize, scale);
+        auto scaledKernelSize = FEGaussianBlur::calculateUnscaledKernelSize(deviation / scale);
+        applyPlatform(*scaledBuffer, *scaledTempBuffer, scaledKernelSize.width(), scaledKernelSize.height(), scaledSize, result.isAlphaImage(), m_effect->edgeMode());
+        upscaleBlurResult(*scaledBuffer, scaledSize, *destinationPixelBuffer, paintSize, scale);
+        return true;
+    }
+#endif
     auto tempBuffer = destinationPixelBuffer->createScratchPixelBuffer(paintSize);
     if (!tempBuffer)
         return false;
