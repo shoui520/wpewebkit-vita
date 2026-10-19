@@ -57,7 +57,9 @@ namespace WebCore {
 
         // ScalableImageDecoder
         String filenameExtension() const override { return "jpg"_s; }
+        IntSize frameSizeAtIndex(size_t, SubsamplingLevel) const override;
         ScalableImageDecoderFrame* frameBufferAtIndex(size_t index) override;
+        PlatformImagePtr createFrameImageAtIndex(size_t, SubsamplingLevel = SubsamplingLevel::Default, const DecodingOptions& = DecodingOptions(DecodingMode::Synchronous)) override;
         // CAUTION: setFailed() deletes |m_reader|.  Be careful to avoid
         // accessing deleted memory, especially when calling this from inside
         // JPEGImageReader!
@@ -65,6 +67,9 @@ namespace WebCore {
 
         bool outputScanlines();
         void jpegComplete();
+
+        // The frame is decoded at 1/2^level of the image's size: libjpeg then skips most of the work.
+        unsigned scaleDenominator() const { return 1 << static_cast<int>(m_subsamplingLevel); }
 
         void setOrientation(ImageOrientation orientation) { m_orientation = orientation; }
 #if USE(LCMS)
@@ -89,6 +94,7 @@ namespace WebCore {
         void clear();
 
         std::unique_ptr<JPEGImageReader> m_reader;
+        SubsamplingLevel m_subsamplingLevel { SubsamplingLevel::Default };
 #if USE(LCMS)
         LCMSTransformPtr m_iccTransform;
 #endif

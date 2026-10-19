@@ -268,9 +268,17 @@ SubsamplingLevel BitmapImageDescriptor::subsamplingLevelForScaleFactor(GraphicsC
     return static_cast<SubsamplingLevel>(std::min(result, static_cast<int>(maximumSubsamplingLevel())));
 #else
     UNUSED_PARAM(context);
-    UNUSED_PARAM(scaleFactor);
-    UNUSED_PARAM(allowImageSubsampling);
-    return SubsamplingLevel::Default;
+    if (allowImageSubsampling == AllowImageSubsampling::No)
+        return SubsamplingLevel::Default;
+
+    // Decoders that can decode at a power-of-two reduction (JPEG) use the smallest that keeps as
+    // many pixels as are drawn: a larger frame only costs decoding, memory and filtering.
+    float scale = std::max(scaleFactor.width(), scaleFactor.height());
+    if (!(scale > 0 && scale < 1))
+        return SubsamplingLevel::Default;
+
+    int result = std::floor(std::log2(1 / scale));
+    return static_cast<SubsamplingLevel>(std::min(result, static_cast<int>(SubsamplingLevel::Last)));
 #endif
 }
 

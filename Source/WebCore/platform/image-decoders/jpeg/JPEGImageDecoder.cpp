@@ -420,6 +420,8 @@ public:
             m_info.do_fancy_upsampling = doFancyUpsampling() ? TRUE : FALSE;
             m_info.enable_2pass_quant = FALSE;
             m_info.do_block_smoothing = TRUE;
+            m_info.scale_num = 1;
+            m_info.scale_denom = m_decoder->scaleDenominator();
 
             // Start decompressor.
             if (!jpeg_start_decompress(&m_info))
@@ -566,6 +568,30 @@ JPEGImageDecoder::~JPEGImageDecoder()
     clear();
 }
 
+IntSize JPEGImageDecoder::frameSizeAtIndex(size_t, SubsamplingLevel subsamplingLevel) const
+{
+    // libjpeg rounds scaled sizes up.
+    int denominator = 1 << static_cast<int>(subsamplingLevel);
+    auto size = this->size();
+    return { (size.width() + denominator - 1) / denominator, (size.height() + denominator - 1) / denominator };
+}
+
+PlatformImagePtr JPEGImageDecoder::createFrameImageAtIndex(size_t index, SubsamplingLevel subsamplingLevel, const DecodingOptions& options)
+{
+    {
+        Locker locker { m_lock };
+        // Decode again when more pixels are wanted than the frame has. One with more is drawn
+        // scaled down, unless its decoding hasn't started.
+        bool decodingStarted = !m_frameBufferCache.isEmpty() && !m_frameBufferCache[0].isInvalid();
+        if (subsamplingLevel < m_subsamplingLevel || (subsamplingLevel > m_subsamplingLevel && !decodingStarted)) {
+            m_frameBufferCache.clear();
+            clear();
+            m_subsamplingLevel = subsamplingLevel;
+        }
+    }
+    return ScalableImageDecoder::createFrameImageAtIndex(index, subsamplingLevel, options);
+}
+
 ScalableImageDecoderFrame* JPEGImageDecoder::frameBufferAtIndex(size_t index)
 {
     if (index)
@@ -656,18 +682,18 @@ bool JPEGImageDecoder::outputScanlines()
     if (m_frameBufferCache.isEmpty())
         return false;
 
+    jpeg_decompress_struct* info = m_reader->info();
+
     // Initialize the framebuffer if needed.
     auto& buffer = m_frameBufferCache[0];
     if (buffer.isInvalid()) {
-        if (!buffer.initialize(size(), m_premultiplyAlpha))
+        if (!buffer.initialize(IntSize(info->output_width, info->output_height), m_premultiplyAlpha))
             return setFailed();
         buffer.setDecodingStatus(DecodingStatus::Partial);
         // The buffer is transparent outside the decoded area while the image is
         // loading. The completed image will be marked fully opaque in jpegComplete().
         buffer.setHasAlpha(true);
     }
-
-    jpeg_decompress_struct* info = m_reader->info();
 
 #if defined(TURBO_JPEG_RGB_SWIZZLE)
     if (turboSwizzled(info->out_color_space)) {
