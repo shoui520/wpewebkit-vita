@@ -208,8 +208,14 @@ static void addToGlyphBuffer(GlyphBuffer& glyphBuffer, Glyph glyph, const Font& 
     // However, CTFontTransformGlyphs() can't delete these 0 glyphs from the shaped text,
     // so we shouldn't add them in the first place if we're using that shaping routine.
     // Any other shaping routine should delete these glyphs from the shaped text.
+#if USE(FREETYPE)
+    // FreeType based ports don't shape simple text, so nothing would delete them, and glyph 0 would be
+    // drawn: a missing character's .notdef box over the next character.
+    UNUSED_PARAM(character);
+#else
     if (!U_IS_BMP(character))
         glyphBuffer.add(0, font, 0, currentCharacterIndex + 1);
+#endif
 }
 
 struct SmallCapsState {
