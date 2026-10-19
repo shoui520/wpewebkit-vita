@@ -45,6 +45,7 @@
 #include <wtf/NeverDestroyed.h>
 #include <wtf/text/CString.h>
 #include <wtf/text/MakeString.h>
+#include <wtf/unicode/CharacterNames.h>
 
 #if PLATFORM(GTK) || (PLATFORM(WPE) && ENABLE(WPE_PLATFORM))
 #include "SystemSettings.h"
@@ -130,6 +131,11 @@ static void getFontPropertiesFromPattern(FcPattern* pattern, const FontDescripti
 
 RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription& description, const Font&, IsForPlatformFont, PreferColoredFont preferColoredFont, StringView stringView)
 {
+#if PLATFORM(VITA)
+    // SystemFallbackFontCache asks for emoji presentation with a variation selector 16.
+    if (!stringView.isEmpty() && stringView[stringView.length() - 1] == emojiVariationSelector)
+        preferColoredFont = PreferColoredFont::Yes;
+#endif
     RefPtr<FcPattern> resultPattern = m_fontSetCache.bestForCharacters(description, preferColoredFont == PreferColoredFont::Yes, stringView);
     if (!resultPattern)
         return nullptr;

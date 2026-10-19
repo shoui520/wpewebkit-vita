@@ -46,6 +46,7 @@
 #include "RefPtrCairo.h"
 #include "ShadowBlur.h"
 #include <unicode/uchar.h>
+#include <wtf/text/CharacterProperties.h>
 
 namespace WebCore {
 
@@ -133,8 +134,31 @@ float Font::platformWidthForGlyph(Glyph glyph) const
     return width ? width : m_spaceWidth;
 }
 
-ResolvedEmojiPolicy FontCascade::resolveEmojiPolicy(FontVariantEmoji fontVariantEmoji, char32_t)
+ResolvedEmojiPolicy FontCascade::resolveEmojiPolicy(FontVariantEmoji fontVariantEmoji, char32_t character)
 {
+#if PLATFORM(VITA)
+    // As with Skia: system fallback prefers a color font for emoji presentation, so characters shown as
+    // emoji by default don't take the text forms a symbol font has of them.
+    switch (fontVariantEmoji) {
+    case FontVariantEmoji::Normal:
+        if (isEmojiWithPresentationByDefault(character)
+            || isEmojiModifierBase(character)
+            || isEmojiFitzpatrickModifier(character))
+            return ResolvedEmojiPolicy::RequireEmoji;
+        break;
+    case FontVariantEmoji::Unicode:
+        if (u_hasBinaryProperty(character, UCHAR_EMOJI))
+            return isEmojiWithPresentationByDefault(character) ? ResolvedEmojiPolicy::RequireEmoji : ResolvedEmojiPolicy::RequireText;
+        break;
+    case FontVariantEmoji::Text:
+        return ResolvedEmojiPolicy::RequireText;
+    case FontVariantEmoji::Emoji:
+        if (u_hasBinaryProperty(character, UCHAR_EMOJI))
+            return ResolvedEmojiPolicy::RequireEmoji;
+    }
+    return ResolvedEmojiPolicy::NoPreference;
+#else
+    UNUSED_PARAM(character);
     // FIXME: https://bugs.webkit.org/show_bug.cgi?id=259205 We can't return RequireText or RequireEmoji
     // unless we have a way of knowing whether a font/glyph is color or not.
     switch (fontVariantEmoji) {
@@ -147,6 +171,7 @@ ResolvedEmojiPolicy FontCascade::resolveEmojiPolicy(FontVariantEmoji fontVariant
         return ResolvedEmojiPolicy::RequireEmoji;
     }
     return ResolvedEmojiPolicy::NoPreference;
+#endif
 }
 
 } // namespace WebCore
