@@ -50,12 +50,15 @@ public:
     RepetitionCount repetitionCount() const override;
     size_t frameCount() const override { return m_frameCount; }
     void clearFrameBufferCache(size_t) override;
+    // libwebp scales still images as it decodes them.
+    bool canDecodeSubsampled() const override { return !(m_formatFlags & ANIMATION_FLAG); }
 
 private:
     WEBPImageDecoder(AlphaOption, GammaAndColorProfileOption);
     void tryDecodeSize(bool) override { parseHeader(); }
     void decode(size_t, bool);
     void decodeFrame(size_t, WebPDemuxer*);
+    void decodeStillFrame(const WebPIterator&);
     void parseHeader();
     bool initFrameBuffer(size_t, const WebPIterator*);
     void applyPostProcessing(size_t, WebPIDecoder*, WebPDecBuffer&, bool);

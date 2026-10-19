@@ -421,7 +421,7 @@ public:
             m_info.enable_2pass_quant = FALSE;
             m_info.do_block_smoothing = TRUE;
             m_info.scale_num = 1;
-            m_info.scale_denom = m_decoder->scaleDenominator();
+            m_info.scale_denom = m_decoder->subsamplingScale();
 
             // Start decompressor.
             if (!jpeg_start_decompress(&m_info))
@@ -566,30 +566,6 @@ JPEGImageDecoder::JPEGImageDecoder(AlphaOption alphaOption, GammaAndColorProfile
 JPEGImageDecoder::~JPEGImageDecoder()
 {
     clear();
-}
-
-IntSize JPEGImageDecoder::frameSizeAtIndex(size_t, SubsamplingLevel subsamplingLevel) const
-{
-    // libjpeg rounds scaled sizes up.
-    int denominator = 1 << static_cast<int>(subsamplingLevel);
-    auto size = this->size();
-    return { (size.width() + denominator - 1) / denominator, (size.height() + denominator - 1) / denominator };
-}
-
-PlatformImagePtr JPEGImageDecoder::createFrameImageAtIndex(size_t index, SubsamplingLevel subsamplingLevel, const DecodingOptions& options)
-{
-    {
-        Locker locker { m_lock };
-        // Decode again when more pixels are wanted than the frame has. One with more is drawn
-        // scaled down, unless its decoding hasn't started.
-        bool decodingStarted = !m_frameBufferCache.isEmpty() && !m_frameBufferCache[0].isInvalid();
-        if (subsamplingLevel < m_subsamplingLevel || (subsamplingLevel > m_subsamplingLevel && !decodingStarted)) {
-            m_frameBufferCache.clear();
-            clear();
-            m_subsamplingLevel = subsamplingLevel;
-        }
-    }
-    return ScalableImageDecoder::createFrameImageAtIndex(index, subsamplingLevel, options);
 }
 
 ScalableImageDecoderFrame* JPEGImageDecoder::frameBufferAtIndex(size_t index)

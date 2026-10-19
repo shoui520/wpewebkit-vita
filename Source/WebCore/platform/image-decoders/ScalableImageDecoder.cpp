@@ -219,12 +219,23 @@ Seconds ScalableImageDecoder::frameDurationAtIndex(size_t index) const
     return duration;
 }
 
-PlatformImagePtr ScalableImageDecoder::createFrameImageAtIndex(size_t index, SubsamplingLevel, const DecodingOptions&)
+PlatformImagePtr ScalableImageDecoder::createFrameImageAtIndex(size_t index, SubsamplingLevel subsamplingLevel, const DecodingOptions&)
 {
     Locker locker { m_lock };
     // Zero-height images can cause problems for some ports. If we have an empty image dimension, just bail.
     if (size().isEmpty())
         return nullptr;
+
+    // Decode again when more pixels are wanted than the frame has. One with more is drawn
+    // scaled down, unless its decoding hasn't started.
+    if (canDecodeSubsampled() && subsamplingLevel != m_subsamplingLevel) {
+        bool decodingStarted = !m_frameBufferCache.isEmpty() && !m_frameBufferCache[0].isInvalid();
+        if (subsamplingLevel < m_subsamplingLevel || !decodingStarted) {
+            m_frameBufferCache.clear();
+            restartDecoding();
+            m_subsamplingLevel = subsamplingLevel;
+        }
+    }
 
     auto* buffer = frameBufferAtIndex(index);
     if (!buffer || buffer->isInvalid() || !buffer->hasBackingStore())

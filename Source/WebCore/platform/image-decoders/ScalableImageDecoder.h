@@ -103,13 +103,23 @@ public:
 
     // This will only differ from size() for ICO (where each frame is a
     // different icon) or other formats where different frames are different
-    // sizes. This does NOT differ from size() for GIF, since decoding GIFs
+    // sizes, and for frames decoded scaled down (rounded up, as libjpeg does).
+    // This does NOT differ from size() for GIF, since decoding GIFs
     // composites any smaller frames against previous frames to create full-
     // size frames.
-    IntSize frameSizeAtIndex(size_t, SubsamplingLevel) const override
+    IntSize frameSizeAtIndex(size_t, SubsamplingLevel subsamplingLevel) const override
     {
-        return size();
+        if (!canDecodeSubsampled())
+            return size();
+        int denominator = 1 << static_cast<int>(subsamplingLevel);
+        auto size = this->size();
+        return { (size.width() + denominator - 1) / denominator, (size.height() + denominator - 1) / denominator };
     }
+
+    // Whether frames can be decoded scaled down by 2^subsamplingLevel(), when the image is drawn
+    // smaller than it is: that saves decoding, memory, and filtering on every draw.
+    virtual bool canDecodeSubsampled() const { return false; }
+    unsigned subsamplingScale() const { return 1 << static_cast<int>(m_subsamplingLevel); }
 
     // Returns whether the size is legal (i.e. not going to result in
     // overflow elsewhere). If not, marks decoding as failed.
@@ -167,6 +177,9 @@ public:
 
     bool failed() const { return m_encodedDataStatus == EncodedDataStatus::Error; }
 
+    // Drops decoding state before frames are decoded again at another subsampling level.
+    virtual void restartDecoding() { }
+
     // Clears decoded pixel data from before the provided frame unless that
     // data may be needed to decode future frames (e.g. due to GIF frame
     // compositing).
@@ -184,6 +197,7 @@ protected:
     bool m_ignoreGammaAndColorProfile;
     ImageOrientation m_orientation;
     std::optional<IntSize> m_densityCorrectedSize;
+    SubsamplingLevel m_subsamplingLevel { SubsamplingLevel::Default };
 
 private:
     virtual void tryDecodeSize(bool) = 0;

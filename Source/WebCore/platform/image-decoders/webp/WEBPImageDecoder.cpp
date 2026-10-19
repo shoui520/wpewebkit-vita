@@ -164,6 +164,11 @@ void WEBPImageDecoder::decodeFrame(size_t frameIndex, WebPDemuxer* demuxer)
     if (!webpFrameAtIndex(demuxer, frameIndex, &webpFrame))
         return;
 
+    if (canDecodeSubsampled()) {
+        decodeStillFrame(webpFrame);
+        return;
+    }
+
     const uint8_t* dataBytes = reinterpret_cast<const uint8_t*>(webpFrame.fragment.bytes);
     size_t dataSize = webpFrame.fragment.size;
     bool blend = webpFrame.blend_method == WEBP_MUX_BLEND ? true : false;
@@ -206,6 +211,61 @@ void WEBPImageDecoder::decodeFrame(size_t frameIndex, WebPDemuxer* demuxer)
     case VP8_STATUS_SUSPENDED:
         if (!isAllDataReceived()) {
             applyPostProcessing(frameIndex, decoder, decoderBuffer, blend);
+            buffer.setDecodingStatus(DecodingStatus::Partial);
+            break;
+        }
+        [[fallthrough]];
+    default:
+        setFailed();
+    }
+
+    WebPIDelete(decoder);
+}
+
+// A still image decodes straight into its frame (ARGB words: BGRA bytes on little-endian
+// machines), scaled down by the subsampling level.
+void WEBPImageDecoder::decodeStillFrame(const WebPIterator& webpFrame)
+{
+    ASSERT(!m_frameBufferCache.isEmpty());
+    auto& buffer = m_frameBufferCache[0];
+    auto frameSize = frameSizeAtIndex(0, m_subsamplingLevel);
+    if (buffer.isInvalid()) {
+        if (!buffer.initialize(frameSize, m_premultiplyAlpha)) {
+            setFailed();
+            return;
+        }
+        buffer.setHasAlpha(webpFrame.has_alpha);
+    }
+
+    WebPDecoderConfig config;
+    if (!WebPInitDecoderConfig(&config)) {
+        setFailed();
+        return;
+    }
+    if (frameSize != size()) {
+        config.options.use_scaling = 1;
+        config.options.scaled_width = frameSize.width();
+        config.options.scaled_height = frameSize.height();
+    }
+    auto pixels = asWritableBytes(buffer.backingStore()->pixelsStartingAt(0, 0));
+    config.output.colorspace = m_premultiplyAlpha ? MODE_bgrA : MODE_BGRA;
+    config.output.is_external_memory = 1;
+    config.output.u.RGBA.rgba = pixels.data();
+    config.output.u.RGBA.stride = frameSize.width() * sizeof(uint32_t);
+    config.output.u.RGBA.size = pixels.size();
+
+    WebPIDecoder* decoder = WebPIDecode(nullptr, 0, &config);
+    if (!decoder) {
+        setFailed();
+        return;
+    }
+
+    switch (WebPIUpdate(decoder, reinterpret_cast<const uint8_t*>(webpFrame.fragment.bytes), webpFrame.fragment.size)) {
+    case VP8_STATUS_OK:
+        buffer.setDecodingStatus(DecodingStatus::Complete);
+        break;
+    case VP8_STATUS_SUSPENDED:
+        if (!isAllDataReceived()) {
             buffer.setDecodingStatus(DecodingStatus::Partial);
             break;
         }
