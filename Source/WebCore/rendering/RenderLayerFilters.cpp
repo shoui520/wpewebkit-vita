@@ -179,8 +179,14 @@ GraphicsContext* RenderLayerFilters::beginFilterEffect(RenderElement& renderer, 
         dirtyFilterRegion = intersection(filterBoxRect, dirtyFilterRegion);
         filterRegion = dirtyFilterRegion;
 
+#if PLATFORM(VITA)
+        // The source's region already holds all the filters move into the dirty rect, and beyond the
+        // dirty rect their results lack the source outside it anyway: expanding it again by the outsets
+        // makes a large blur work on up to four times the pixels drawn.
+#else
         if (!outsets.isZero())
             filterRegion.expand(toLayoutBoxExtent(outsets));
+#endif
     }
 
     if (filterRegion.isEmpty())
