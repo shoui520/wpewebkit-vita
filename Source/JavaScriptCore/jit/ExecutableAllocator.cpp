@@ -1184,6 +1184,13 @@ double ExecutableAllocator::memoryPressureMultiplier(size_t addedMemoryUsage)
     return result;
 }
 
+#if OS(VITA)
+// Executable memory use for the embedder's memory log. Refused allocations were turned down
+// because the pool was down to its reserve or full: their code stays in a lower tier.
+static std::atomic<size_t> vitaPeakBytesAllocated;
+static std::atomic<unsigned> vitaRefusedAllocations;
+#endif
+
 RefPtr<ExecutableMemoryHandle> ExecutableAllocator::allocate(size_t sizeInBytes, JITCompilationEffort effort)
 {
     FixedVMPoolExecutableAllocator* allocator = g_jscConfig.fixedVMPoolExecutableAllocator;
@@ -1212,6 +1219,9 @@ RefPtr<ExecutableMemoryHandle> ExecutableAllocator::allocate(size_t sizeInBytes,
         if (bytesAllocated > bytesAvailable) {
             if (Options::logExecutableAllocation())
                 dataLog("Allocation failed because bytes allocated ", bytesAllocated,  " > ", bytesAvailable, " bytes available.\n");
+#if OS(VITA)
+            ++vitaRefusedAllocations;
+#endif
             return nullptr;
         }
     }
@@ -1222,8 +1232,16 @@ RefPtr<ExecutableMemoryHandle> ExecutableAllocator::allocate(size_t sizeInBytes,
             dataLog("Ran out of executable memory while allocating ", sizeInBytes, " bytes.\n");
             CRASH();
         }
+#if OS(VITA)
+        ++vitaRefusedAllocations;
+#endif
         return nullptr;
     }
+#if OS(VITA)
+    size_t bytesAllocated = allocator->bytesAllocated();
+    if (bytesAllocated > vitaPeakBytesAllocated)
+        vitaPeakBytesAllocated = bytesAllocated;
+#endif
 
     void* start = allocator->memoryStart();
     void* end = allocator->memoryEnd();
@@ -1249,6 +1267,18 @@ Lock& ExecutableAllocator::getLock() const
         return Base::getLock();
     return allocator->getLock();
 }
+
+#if OS(VITA)
+extern "C" void vitaExecutableMemoryStatistics(size_t* allocated, size_t* available, size_t* reserved, size_t* peak, unsigned* refused)
+{
+    FixedVMPoolExecutableAllocator* allocator = g_jscConfig.fixedVMPoolExecutableAllocator;
+    *allocated = allocator ? allocator->bytesAllocated() : 0;
+    *available = allocator ? allocator->bytesAvailable() : 0;
+    *reserved = allocator ? allocator->bytesReserved() : 0;
+    *peak = vitaPeakBytesAllocated;
+    *refused = vitaRefusedAllocations;
+}
+#endif
 
 size_t ExecutableAllocator::committedByteCount()
 {
