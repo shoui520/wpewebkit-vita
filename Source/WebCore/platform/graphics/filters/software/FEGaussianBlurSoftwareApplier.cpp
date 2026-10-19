@@ -304,7 +304,7 @@ inline void FEGaussianBlurSoftwareApplier::boxBlurUnaccelerated(PixelBuffer& ioB
             kernelPosition(i, kernelSizeX, dxLeft, dxRight);
 #if HAVE(ARM_NEON_INTRINSICS)
             if (!isAlphaImage)
-                boxBlurNEON(*fromBuffer, *toBuffer, kernelSizeX, dxLeft, dxRight, 4, stride, paintSize.width(), paintSize.height());
+                boxBlurRowsNEON(*fromBuffer, *toBuffer, kernelSizeX, dxLeft, dxRight, paintSize.width(), paintSize.height());
             else
                 boxBlur(*fromBuffer, *toBuffer, kernelSizeX, dxLeft, dxRight, 4, stride, paintSize.width(), paintSize.height(), true, edgeMode);
 #else
@@ -317,7 +317,7 @@ inline void FEGaussianBlurSoftwareApplier::boxBlurUnaccelerated(PixelBuffer& ioB
             kernelPosition(i, kernelSizeY, dyLeft, dyRight);
 #if HAVE(ARM_NEON_INTRINSICS)
             if (!isAlphaImage)
-                boxBlurNEON(*fromBuffer, *toBuffer, kernelSizeY, dyLeft, dyRight, stride, 4, paintSize.height(), paintSize.width());
+                boxBlurColumnsNEON(*fromBuffer, *toBuffer, kernelSizeY, dyLeft, dyRight, paintSize.width(), paintSize.height());
             else
                 boxBlur(*fromBuffer, *toBuffer, kernelSizeY, dyLeft, dyRight, stride, 4, paintSize.height(), paintSize.width(), true, edgeMode);
 #else
