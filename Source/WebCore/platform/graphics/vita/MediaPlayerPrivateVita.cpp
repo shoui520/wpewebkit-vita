@@ -28,211 +28,42 @@
 
 #if ENABLE(VIDEO) && PLATFORM(VITA)
 
+#include "AudioTrackPrivate.h"
 #include "GraphicsContext.h"
 #include "MediaByteStream.h"
 #include "MediaPlayer.h"
 #include "NativeImage.h"
+#include "VideoTrackPrivate.h"
 #include <arm_neon.h>
 #include <cairo.h>
-#include <psp2/audioout.h>
-#include <psp2/avplayer.h>
-#include <psp2/kernel/sysmem.h>
-#include <psp2/sysmodule.h>
-#include <wtf/Condition.h>
-#include <wtf/Lock.h>
 #include <wtf/MainThread.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/TZoneMallocInlines.h>
-#include <wtf/Threading.h>
 #include <wtf/text/MakeString.h>
-
-// In the library, though not in the SDK's header.
-extern "C" {
-int sceAvPlayerStreamCount(SceAvPlayerHandle);
-int sceAvPlayerEnableStream(SceAvPlayerHandle, uint32_t stream);
-}
 
 namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(MediaPlayerPrivateVita);
 
-// The video player library's state events.
-enum : int32_t {
-    PlayerStateStop = 1,
-    PlayerStateReady = 2,
-    PlayerStatePlay = 3,
-    PlayerStatePause = 4,
-    PlayerStateBuffering = 5,
-};
-
-// Where the library's events go: the player of one generation, on the main thread.
-struct PlayerEventTarget {
-    WTF_MAKE_STRUCT_TZONE_ALLOCATED(PlayerEventTarget);
-    ThreadSafeWeakPtr<MediaPlayerPrivateVita> player;
-    unsigned generation;
-};
-
-WTF_MAKE_STRUCT_TZONE_ALLOCATED_IMPL(PlayerEventTarget);
-
-// Plays the player's audio on a system port from a thread of its own.
-class MediaAudioOutput final : public ThreadSafeRefCounted<MediaAudioOutput> {
+// The first video and audio streams, the ones played.
+class VitaVideoTrack final : public VideoTrackPrivate {
 public:
-    static Ref<MediaAudioOutput> create(int handle) { return adoptRef(*new MediaAudioOutput(handle)); }
-
-    void start();
-    void stop();
-    // 0 to 1.
-    void setVolume(float volume) { m_volume = std::clamp(static_cast<int>(volume * SCE_AUDIO_VOLUME_0DB), 0, SCE_AUDIO_VOLUME_0DB); }
-
-private:
-    explicit MediaAudioOutput(int handle)
-        : m_handle(handle)
-    {
-    }
-
-    void run();
-
-    const int m_handle;
-    std::atomic<bool> m_running { false };
-    std::atomic<int> m_volume { SCE_AUDIO_VOLUME_0DB };
-    RefPtr<Thread> m_thread;
+    static Ref<VitaVideoTrack> create() { return adoptRef(*new VitaVideoTrack); }
+    TrackID id() const final { return 1; }
+    Kind kind() const final { return Kind::Main; }
 };
 
-void MediaAudioOutput::start()
-{
-    if (m_thread)
-        return;
-    m_running = true;
-    m_thread = Thread::create("Media audio"_s, [protectedThis = Ref { *this }] {
-        protectedThis->run();
-    }, ThreadType::Audio, Thread::QOS::UserInteractive);
-}
+class VitaAudioTrack final : public AudioTrackPrivate {
+public:
+    static Ref<VitaAudioTrack> create() { return adoptRef(*new VitaAudioTrack); }
+    TrackID id() const final { return 2; }
+    Kind kind() const final { return Kind::Main; }
+};
 
-void MediaAudioOutput::stop()
-{
-    m_running = false;
-    if (RefPtr thread = std::exchange(m_thread, nullptr))
-        thread->waitForCompletion();
-}
-
-void MediaAudioOutput::run()
-{
-    int port = -1;
-    auto portType = SCE_AUDIO_OUT_PORT_TYPE_MAIN;
-    unsigned portSamples = 0;
-    unsigned portRate = 0;
-    unsigned portChannels = 0;
-    int portVolume = -1;
-    while (m_running) {
-        SceAvPlayerFrameInfo frame { };
-        if (!sceAvPlayerGetAudioData(m_handle, &frame) || !frame.pData) {
-            sleep(5_ms);
-            continue;
-        }
-        unsigned channels = frame.details.audio.channelCount == 1 ? 1 : 2;
-        unsigned samples = frame.details.audio.size / (2 * channels);
-        unsigned rate = frame.details.audio.sampleRate;
-        if (!samples || !rate)
-            continue;
-        auto mode = channels == 1 ? SCE_AUDIO_OUT_MODE_MONO : SCE_AUDIO_OUT_MODE_STEREO;
-        // The main port plays only 48 kHz; the BGM port takes the other rates
-        // (YouTube's AAC is 44.1 kHz, and played silent on the main port).
-        auto type = rate == 48000 ? SCE_AUDIO_OUT_PORT_TYPE_MAIN : SCE_AUDIO_OUT_PORT_TYPE_BGM;
-        if (port >= 0 && type != portType) {
-            sceAudioOutReleasePort(port);
-            port = -1;
-        }
-        if (port < 0) {
-            port = sceAudioOutOpenPort(type, samples, rate, mode);
-            if (port < 0) {
-                sleep(100_ms);
-                continue;
-            }
-            portType = type;
-            portVolume = -1;
-        } else if (samples != portSamples || rate != portRate || channels != portChannels)
-            sceAudioOutSetConfig(port, samples, rate, mode);
-        portSamples = samples;
-        portRate = rate;
-        portChannels = channels;
-        if (int volume = m_volume; volume != portVolume) {
-            int volumes[2] = { volume, volume };
-            sceAudioOutSetVolume(port, static_cast<SceAudioOutChannelFlag>(SCE_AUDIO_VOLUME_FLAG_L_CH | SCE_AUDIO_VOLUME_FLAG_R_CH), volumes);
-            portVolume = volume;
-        }
-        // Blocks until the port takes the samples: this paces the thread.
-        sceAudioOutOutput(port, frame.pData);
-    }
-    if (port >= 0) {
-        sceAudioOutOutput(port, nullptr);
-        sceAudioOutReleasePort(port);
-    }
-}
-
-// The player's memory: frames go in physically contiguous memory that the
-// decoder can write.
-static void* allocate(void*, uint32_t alignment, uint32_t size)
-{
-    return tryFastAlignedMalloc(std::max<uint32_t>(alignment, sizeof(void*)), size);
-}
-
-static void deallocate(void*, void* pointer)
-{
-    fastAlignedFree(pointer);
-}
-
-static void* allocateFrameMemory(void*, uint32_t alignment, uint32_t size)
-{
-    constexpr uint32_t blockAlignment = 1 * MB;
-    alignment = std::max(alignment, blockAlignment);
-    size = (size + alignment - 1) & ~(alignment - 1);
-    SceUID block = sceKernelAllocMemBlock("media frame", SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW, size, nullptr);
-    if (block < 0)
-        return nullptr;
-    void* base = nullptr;
-    sceKernelGetMemBlockBase(block, &base);
-    return base;
-}
-
-static void freeFrameMemory(void*, void* pointer)
-{
-    SceUID block = sceKernelFindMemBlockByAddr(pointer, 0);
-    if (block >= 0)
-        sceKernelFreeMemBlock(block);
-}
-
-static int openStream(void*, const char*)
-{
-    return 0;
-}
-
-static int closeStream(void*)
-{
-    return 0;
-}
-
-static int readStream(void* stream, uint8_t* buffer, uint64_t position, uint32_t length)
-{
-    return static_cast<MediaByteStream*>(stream)->read(buffer, position, length);
-}
-
-static uint64_t streamSize(void* stream)
-{
-    return static_cast<MediaByteStream*>(stream)->size();
-}
-
-static void playerEventCallback(void* target, int32_t event, int32_t, void*)
-{
-    auto& eventTarget = *static_cast<PlayerEventTarget*>(target);
-    callOnMainThread([player = eventTarget.player, event, generation = eventTarget.generation] {
-        if (RefPtr protectedPlayer = player.get())
-            protectedPlayer->playerEvent(event, generation);
-    });
-}
-
-// Frames from the decoder are NV12: a luma plane, then interleaved U and V at
-// half resolution. They become Cairo's premultiplied BGRA with the limited
-// range BT.601 or BT.709 matrix in 6-bit fixed point.
+// Pictures are 8-bit 4:2:0: NV12 from the hardware decoder (U and V
+// interleaved), I420 from FFmpeg (U and V planes). They become Cairo's
+// premultiplied BGRA with the limited range BT.601 or BT.709 matrix in 6-bit
+// fixed point.
 struct YUVMatrix {
     int16_t y, rv, gu, gv, bu;
 };
@@ -264,25 +95,37 @@ static inline void storePixels(const YUVMatrix& matrix, uint8x8_t luma, int16x8_
     vst4_u8(out, bgra);
 }
 
-static void convertFrame(const uint8_t* frame, unsigned width, unsigned height, cairo_surface_t* surface)
+template<bool interleaved>
+static void convertFrame(const VitaVideoFrame& frame, cairo_surface_t* surface)
 {
-    auto matrix = matrixForHeight(height);
-    unsigned stride = (width + 7) & ~7u;
-    const uint8_t* chroma = frame + stride * height;
+    auto matrix = matrixForHeight(frame.height);
+    unsigned width = frame.width;
+    unsigned height = frame.height;
+    // Bytes from one chroma sample to the next.
+    constexpr unsigned step = interleaved ? 2 : 1;
     uint8_t* output = cairo_image_surface_get_data(surface);
     unsigned outputStride = cairo_image_surface_get_stride(surface);
 
     const uint8x8_t offset128 = vdup_n_u8(128);
     unsigned vectorWidth = width & ~15u;
     for (unsigned row = 0; row < height; row += 2) {
-        const uint8_t* uv = chroma + (row / 2) * stride;
+        const uint8_t* uRow = frame.u + (row / 2) * frame.chromaPitch;
+        const uint8_t* vRow = frame.v + (row / 2) * frame.chromaPitch;
         for (unsigned line = row; line < std::min(row + 2, height); ++line) {
-            const uint8_t* luma = frame + line * stride;
+            const uint8_t* luma = frame.luma + line * frame.lumaPitch;
             uint8_t* out = output + line * outputStride;
             for (unsigned x = 0; x < vectorWidth; x += 16) {
-                uint8x8x2_t pairs = vld2_u8(uv + x);
-                int16x8_t u = vreinterpretq_s16_u16(vsubl_u8(pairs.val[0], offset128));
-                int16x8_t v = vreinterpretq_s16_u16(vsubl_u8(pairs.val[1], offset128));
+                uint8x8_t uBytes, vBytes;
+                if constexpr (interleaved) {
+                    uint8x8x2_t pairs = vld2_u8(uRow + x);
+                    uBytes = pairs.val[0];
+                    vBytes = pairs.val[1];
+                } else {
+                    uBytes = vld1_u8(uRow + x / 2);
+                    vBytes = vld1_u8(vRow + x / 2);
+                }
+                int16x8_t u = vreinterpretq_s16_u16(vsubl_u8(uBytes, offset128));
+                int16x8_t v = vreinterpretq_s16_u16(vsubl_u8(vBytes, offset128));
                 // Each chroma sample covers two pixels.
                 int16x8x2_t red = vzipq_s16(vmulq_n_s16(v, matrix.rv), vmulq_n_s16(v, matrix.rv));
                 int16x8_t greenTerm = vmlsq_n_s16(vmulq_n_s16(u, -matrix.gu), v, matrix.gv);
@@ -293,7 +136,7 @@ static void convertFrame(const uint8_t* frame, unsigned width, unsigned height, 
                 storePixels(matrix, vget_high_u8(y), red.val[1], green.val[1], blue.val[1], out + (x + 8) * 4);
             }
             for (unsigned x = vectorWidth; x < width; ++x)
-                storePixel(matrix, luma[x], uv[x & ~1u] - 128, uv[(x & ~1u) + 1] - 128, out + x * 4);
+                storePixel(matrix, luma[x], uRow[(x / 2) * step] - 128, vRow[(x / 2) * step] - 128, out + x * 4);
         }
     }
     cairo_surface_mark_dirty(surface);
@@ -302,30 +145,39 @@ static void convertFrame(const uint8_t* frame, unsigned width, unsigned height, 
 // The same at half the width and height, for a video shown at half its size
 // or less: each pixel averages four luma samples and takes the one chroma
 // sample covering them.
-static void convertFrameAtHalfSize(const uint8_t* frame, unsigned width, unsigned height, cairo_surface_t* surface)
+template<bool interleaved>
+static void convertFrameAtHalfSize(const VitaVideoFrame& frame, cairo_surface_t* surface)
 {
-    auto matrix = matrixForHeight(height);
-    unsigned stride = (width + 7) & ~7u;
-    const uint8_t* chroma = frame + stride * height;
+    auto matrix = matrixForHeight(frame.height);
+    constexpr unsigned step = interleaved ? 2 : 1;
     uint8_t* output = cairo_image_surface_get_data(surface);
     unsigned outputStride = cairo_image_surface_get_stride(surface);
 
     const uint8x8_t offset128 = vdup_n_u8(128);
-    unsigned outputWidth = width / 2;
+    unsigned outputWidth = frame.width / 2;
     unsigned vectorWidth = outputWidth & ~15u;
-    for (unsigned row = 0; row < height / 2; ++row) {
-        const uint8_t* top = frame + 2 * row * stride;
-        const uint8_t* bottom = top + stride;
-        const uint8_t* uv = chroma + row * stride;
+    for (unsigned row = 0; row < frame.height / 2; ++row) {
+        const uint8_t* top = frame.luma + 2 * row * frame.lumaPitch;
+        const uint8_t* bottom = top + frame.lumaPitch;
+        const uint8_t* uRow = frame.u + row * frame.chromaPitch;
+        const uint8_t* vRow = frame.v + row * frame.chromaPitch;
         uint8_t* out = output + row * outputStride;
         for (unsigned x = 0; x < vectorWidth; x += 16) {
             uint8x16x2_t topPairs = vld2q_u8(top + 2 * x);
             uint8x16x2_t bottomPairs = vld2q_u8(bottom + 2 * x);
             uint8x16_t y = vrhaddq_u8(vhaddq_u8(topPairs.val[0], topPairs.val[1]), vhaddq_u8(bottomPairs.val[0], bottomPairs.val[1]));
-            uint8x16x2_t pairs = vld2q_u8(uv + 2 * x);
+            uint8x16_t uBytes, vBytes;
+            if constexpr (interleaved) {
+                uint8x16x2_t pairs = vld2q_u8(uRow + 2 * x);
+                uBytes = pairs.val[0];
+                vBytes = pairs.val[1];
+            } else {
+                uBytes = vld1q_u8(uRow + x);
+                vBytes = vld1q_u8(vRow + x);
+            }
             for (int half = 0; half < 2; ++half) {
-                int16x8_t u = vreinterpretq_s16_u16(vsubl_u8(half ? vget_high_u8(pairs.val[0]) : vget_low_u8(pairs.val[0]), offset128));
-                int16x8_t v = vreinterpretq_s16_u16(vsubl_u8(half ? vget_high_u8(pairs.val[1]) : vget_low_u8(pairs.val[1]), offset128));
+                int16x8_t u = vreinterpretq_s16_u16(vsubl_u8(half ? vget_high_u8(uBytes) : vget_low_u8(uBytes), offset128));
+                int16x8_t v = vreinterpretq_s16_u16(vsubl_u8(half ? vget_high_u8(vBytes) : vget_low_u8(vBytes), offset128));
                 int16x8_t green = vmlsq_n_s16(vmulq_n_s16(u, -matrix.gu), v, matrix.gv);
                 storePixels(matrix, half ? vget_high_u8(y) : vget_low_u8(y), vmulq_n_s16(v, matrix.rv), green, vmulq_n_s16(u, matrix.bu), out + (x + half * 8) * 4);
             }
@@ -333,7 +185,7 @@ static void convertFrameAtHalfSize(const uint8_t* frame, unsigned width, unsigne
         for (unsigned x = vectorWidth; x < outputWidth; ++x) {
             // Rounded as the vector loop does.
             int luma = (((top[2 * x] + top[2 * x + 1]) >> 1) + ((bottom[2 * x] + bottom[2 * x + 1]) >> 1) + 1) >> 1;
-            storePixel(matrix, luma, uv[2 * x] - 128, uv[2 * x + 1] - 128, out + x * 4);
+            storePixel(matrix, luma, uRow[x * step] - 128, vRow[x * step] - 128, out + x * 4);
         }
     }
     cairo_surface_mark_dirty(surface);
@@ -343,7 +195,8 @@ static HashSet<String>& mimeTypeCache()
 {
     static NeverDestroyed<HashSet<String>> cache = [] {
         HashSet<String> types;
-        for (auto type : { "video/mp4"_s, "audio/mp4"_s, "video/x-m4v"_s, "audio/x-m4a"_s, "video/quicktime"_s })
+        for (auto type : { "video/mp4"_s, "audio/mp4"_s, "video/x-m4v"_s, "audio/x-m4a"_s, "video/quicktime"_s,
+            "video/webm"_s, "video/x-matroska"_s, "video/ogg"_s, "video/mp2t"_s })
             types.add(type);
         return types;
     }();
@@ -353,6 +206,25 @@ static HashSet<String>& mimeTypeCache()
 void MediaPlayerPrivateVita::getSupportedTypes(HashSet<String>& types)
 {
     types = mimeTypeCache();
+}
+
+// H.264 in 8-bit 4:2:0 (the hardware's, or FFmpeg's past 1920x1088), VP8, VP9
+// profile 0 and Theora; AAC, MP3, Opus, Vorbis and FLAC. Not HEVC or AV1.
+static bool isSupportedCodec(StringView codec)
+{
+    if (codec.startsWith("avc1"_s) || codec.startsWith("avc3"_s)) {
+        // avc1.PPCCLL: High 10, 4:2:2 and 4:4:4 profiles decode to other formats.
+        auto profile = codec.substring(5, 2);
+        return !equalLettersIgnoringASCIICase(profile, "6e"_s) && !equalLettersIgnoringASCIICase(profile, "7a"_s)
+            && !equalLettersIgnoringASCIICase(profile, "f4"_s) && profile != "2C"_s && profile != "2c"_s;
+    }
+    if (codec.startsWith("vp09."_s))
+        return codec.startsWith("vp09.00"_s);
+    for (auto supported : { "vp8"_s, "vp9"_s, "vp8.0"_s, "vp9.0"_s, "theora"_s, "opus"_s, "vorbis"_s, "flac"_s, "mp3"_s, "mp4a.69"_s, "mp4a.6b"_s, "mp4a.6B"_s }) {
+        if (codec == supported)
+            return true;
+    }
+    return codec.startsWith("mp4a.40"_s);
 }
 
 MediaPlayer::SupportsType MediaPlayerPrivateVita::supportsType(const MediaEngineSupportParameters& parameters)
@@ -365,9 +237,8 @@ MediaPlayer::SupportsType MediaPlayerPrivateVita::supportsType(const MediaEngine
     auto codecs = parameters.type.codecs();
     if (codecs.isEmpty())
         return MediaPlayer::SupportsType::MayBeSupported;
-    // H.264 and AAC.
     for (auto& codec : codecs) {
-        if (!codec.startsWith("avc1"_s) && !codec.startsWith("avc3"_s) && !codec.startsWith("mp4a.40"_s))
+        if (!isSupportedCodec(codec))
             return MediaPlayer::SupportsType::IsNotSupported;
     }
     return MediaPlayer::SupportsType::IsSupported;
@@ -400,11 +271,11 @@ void MediaPlayerPrivateVita::registerMediaEngine(MediaEngineRegistrar registrar)
     registrar(makeUnique<MediaPlayerFactoryVita>());
 }
 
-// The library runs one player at a time: a second one in the process crashes it
-// (its file reading keeps state in the library's globals; discord.com has several
-// autoplaying videos). Playing takes the library from the player holding it, and
-// loading takes it from one that is paused with its first frame shown, or ended;
-// otherwise players wait for it in turn. Main thread only.
+// One player at a time has a pipeline: the hardware decoder takes one stream,
+// and each pipeline holds several megabytes (discord.com has several
+// autoplaying videos). Playing takes the pipeline's place from the player
+// holding it, and loading takes it from one that is paused with its first frame
+// shown, or ended; otherwise players wait for it in turn. Main thread only.
 static MediaPlayerPrivateVita* libraryHolder;
 static constexpr Seconds playbackBeforeYield = 2_s;
 
@@ -417,18 +288,49 @@ static Vector<MediaPlayerPrivateVita*>& playersWaitingForLibrary()
 MediaPlayerPrivateVita::MediaPlayerPrivateVita(MediaPlayer& player)
     : m_player(player)
     , m_frameTimer(RunLoop::mainSingleton(), "MediaPlayerPrivateVita::FrameTimer"_s, this, &MediaPlayerPrivateVita::updateFrame)
-    , m_readyTimeout(RunLoop::mainSingleton(), "MediaPlayerPrivateVita::ReadyTimeout"_s, [this] { fail(MediaPlayer::NetworkState::FormatError, "The system video player did not open the media in time"_s); })
+    , m_readyTimeout(RunLoop::mainSingleton(), "MediaPlayerPrivateVita::ReadyTimeout"_s, [this] { fail(MediaPlayer::NetworkState::FormatError, "The media did not open in time"_s); })
 {
 }
 
 MediaPlayerPrivateVita::~MediaPlayerPrivateVita()
 {
     destroyPlayer();
+    removeTracks();
+}
+
+void MediaPlayerPrivateVita::updateTracks()
+{
+    RefPtr player = m_player.get();
+    if (!player)
+        return;
+    if (m_hasVideo && !m_videoTrack) {
+        Ref track = VitaVideoTrack::create();
+        track->setConfiguration({ { }, static_cast<uint32_t>(m_naturalSize.width()), static_cast<uint32_t>(m_naturalSize.height()) });
+        track->setSelected(true);
+        m_videoTrack = track.copyRef();
+        player->addVideoTrack(track);
+    }
+    if (m_hasAudio && !m_audioTrack) {
+        Ref track = VitaAudioTrack::create();
+        track->setEnabled(true);
+        m_audioTrack = track.copyRef();
+        player->addAudioTrack(track);
+    }
+}
+
+void MediaPlayerPrivateVita::removeTracks()
+{
+    RefPtr player = m_player.get();
+    if (RefPtr track = std::exchange(m_videoTrack, nullptr); track && player)
+        player->removeVideoTrack(*track);
+    if (RefPtr track = std::exchange(m_audioTrack, nullptr); track && player)
+        player->removeAudioTrack(*track);
 }
 
 void MediaPlayerPrivateVita::load(const String& url)
 {
     destroyPlayer();
+    removeTracks();
     m_url = URL { url };
     m_errorMessage = { };
     m_suspended = false;
@@ -571,47 +473,18 @@ void MediaPlayerPrivateVita::grantLibraryToNextWaiting()
 void MediaPlayerPrivateVita::createPlayer()
 {
     RefPtr player = m_player.get();
-    if (!player || m_handle || !acquireLibrary())
+    if (!player || m_pipeline || !acquireLibrary())
         return;
     m_suspended = false;
-    static int moduleResult = sceSysmoduleLoadModule(SCE_SYSMODULE_AVPLAYER);
-    if (moduleResult < 0) {
-        fail(MediaPlayer::NetworkState::DecodeError, makeString("The system video player could not be loaded (0x"_s, hex(static_cast<uint32_t>(moduleResult), 8), ')'));
-        return;
-    }
-
-    m_stream = MediaByteStream::create(player->mediaResourceLoader(), m_url);
-    m_eventTarget = makeUnique<PlayerEventTarget>(PlayerEventTarget { *this, ++m_generation });
-    SceAvPlayerInitData init { };
-    init.memoryReplacement.allocate = allocate;
-    init.memoryReplacement.deallocate = deallocate;
-    init.memoryReplacement.allocateTexture = allocateFrameMemory;
-    init.memoryReplacement.deallocateTexture = freeFrameMemory;
-    init.fileReplacement.objectPointer = m_stream.get();
-    init.fileReplacement.open = openStream;
-    init.fileReplacement.close = closeStream;
-    init.fileReplacement.readOffset = readStream;
-    init.fileReplacement.size = streamSize;
-    init.eventReplacement.objectPointer = m_eventTarget.get();
-    init.eventReplacement.eventCallback = playerEventCallback;
-    init.basePriority = 0xA0;
-    init.numOutputVideoFrameBuffers = 3;
-    init.autoStart = false;
-    // The handle is an address, so negative as an int; null on failure.
-    m_handle = sceAvPlayerInit(&init);
-    if (!m_handle) {
-        m_stream->close();
-        m_stream = nullptr;
-        fail(MediaPlayer::NetworkState::DecodeError, "The system video player could not start"_s);
-        return;
-    }
-    m_stream->start();
-    // The name goes to the file replacement; the library may judge the container by it.
-    if (int result = sceAvPlayerAddSource(m_handle, "media.mp4"); result < 0) {
-        fail(MediaPlayer::NetworkState::FormatError, makeString("The system video player did not accept the media (0x"_s, hex(static_cast<uint32_t>(result), 8), ')'));
-        return;
-    }
-    sceAvPlayerSetLooping(m_handle, player->isLooping());
+    Ref stream = MediaByteStream::create(player->mediaResourceLoader(), m_url);
+    m_stream = stream.copyRef();
+    stream->start();
+    m_pipeline = VitaMediaPipeline::create(WTF::move(stream), [weakThis = ThreadSafeWeakPtr { *this }, generation = ++m_generation](VitaMediaPipeline::Event event) {
+        if (RefPtr protectedThis = weakThis.get())
+            protectedThis->pipelineEvent(event, generation);
+    });
+    applyVolume();
+    m_pipeline->start(Seconds { m_startTime.toDouble() });
     m_readyTimeout.startOneShot(60_s);
 }
 
@@ -619,44 +492,39 @@ void MediaPlayerPrivateVita::destroyPlayer()
 {
     m_frameTimer.stop();
     m_readyTimeout.stop();
-    // Reads waiting for data give up, so the player's threads can finish.
-    if (RefPtr stream = m_stream)
+    if (RefPtr pipeline = std::exchange(m_pipeline, nullptr)) {
+        m_droppedFrames += pipeline->droppedFrames();
+        pipeline->stop();
+    } else if (RefPtr stream = m_stream)
         stream->close();
-    if (RefPtr audio = std::exchange(m_audio, nullptr))
-        audio->stop();
-    if (m_handle) {
-        sceAvPlayerStop(m_handle);
-        sceAvPlayerClose(m_handle);
-        m_handle = 0;
-    }
     playersWaitingForLibrary().removeFirst(this);
     if (libraryHolder == this) {
         libraryHolder = nullptr;
         callOnMainThread(grantLibraryToNextWaiting);
     }
-    m_eventTarget = nullptr;
     m_stream = nullptr;
-    m_started = false;
     m_showingFirstFrame = false;
     m_ready = false;
     ++m_generation;
 }
 
-void MediaPlayerPrivateVita::playerEvent(int32_t event, unsigned generation)
+void MediaPlayerPrivateVita::pipelineEvent(VitaMediaPipeline::Event event, unsigned generation)
 {
-    if (generation != m_generation || !m_handle)
+    RefPtr pipeline = m_pipeline;
+    if (generation != m_generation || !pipeline)
         return;
     switch (event) {
-    case PlayerStateReady:
+    case VitaMediaPipeline::Event::Ready:
         playerReady();
         break;
-    case PlayerStateStop:
-        if (!m_ready)
-            fail(MediaPlayer::NetworkState::FormatError, "The system video player could not play the media"_s);
-        else if (m_started)
-            reachedEnd();
+    case VitaMediaPipeline::Event::Failed:
+        fail(m_ready ? MediaPlayer::NetworkState::DecodeError : MediaPlayer::NetworkState::FormatError, pipeline->failure());
         break;
-    default:
+    case VitaMediaPipeline::Event::SeekDone:
+        finishSeek();
+        break;
+    case VitaMediaPipeline::Event::Ended:
+        reachedEnd();
         break;
     }
 }
@@ -670,31 +538,12 @@ void MediaPlayerPrivateVita::playerReady()
     bool hadVideo = m_hasVideo;
     bool hadAudio = m_hasAudio;
     auto oldSize = m_naturalSize;
-    MediaTime duration = MediaTime::zeroTime();
-    int streams = sceAvPlayerStreamCount(m_handle);
-    for (int i = 0; i < streams; ++i) {
-        SceAvPlayerStreamInfo info { };
-        if (sceAvPlayerGetStreamInfo(m_handle, i, &info) < 0)
-            continue;
-        if (info.type == SCE_AVPLAYER_VIDEO) {
-            m_hasVideo = true;
-            float width = info.details.video.width;
-            float height = info.details.video.height;
-            // The shape of a pixel (1 for square ones), not of the picture.
-            if (info.details.video.aspectRatio > 0)
-                width = std::round(width * info.details.video.aspectRatio);
-            m_naturalSize = { width, height };
-        } else if (info.type == SCE_AVPLAYER_AUDIO)
-            m_hasAudio = true;
-        else
-            continue;
-        sceAvPlayerEnableStream(m_handle, i);
-        duration = std::max(duration, MediaTime(static_cast<int64_t>(info.duration), 1000));
-    }
-    if (!m_hasVideo && !m_hasAudio) {
-        fail(MediaPlayer::NetworkState::FormatError, "The media has no stream the system video player can play"_s);
-        return;
-    }
+    auto& info = m_pipeline->info();
+    m_hasVideo = info.hasVideo;
+    m_hasAudio = info.hasAudio;
+    if (m_hasVideo)
+        m_naturalSize = { std::round(info.width * info.pixelAspectRatio), static_cast<float>(info.height) };
+    auto duration = info.duration ? MediaTime::createWithDouble(info.duration->seconds()) : MediaTime::zeroTime();
     bool durationChanged = duration != m_duration;
     m_duration = duration;
 
@@ -705,9 +554,10 @@ void MediaPlayerPrivateVita::playerReady()
         player->durationChanged();
     if (oldSize != m_naturalSize)
         player->sizeChanged();
+    updateTracks();
     if (hadVideo != m_hasVideo || hadAudio != m_hasAudio)
         player->characteristicChanged();
-    // The library buffers as it plays; it has what it needs to start.
+    // The pipeline buffers as it plays; it has what it needs to start.
     setReadyState(MediaPlayer::ReadyState::HaveEnoughData);
     setNetworkState(MediaPlayer::NetworkState::Idle);
     if (!m_paused)
@@ -718,38 +568,25 @@ void MediaPlayerPrivateVita::playerReady()
         scheduleLibraryYield();
 }
 
+// Paused, the pipeline decodes up to the first picture and the timer shows it.
 void MediaPlayerPrivateVita::showFirstFrame()
 {
-    if (m_started || !m_handle)
-        return;
-    m_started = true;
     m_showingFirstFrame = true;
     m_firstFrameStarted = MonotonicTime::now();
-    sceAvPlayerStart(m_handle);
-    if (m_startTime > MediaTime::zeroTime())
-        sceAvPlayerJumpToTime(m_handle, static_cast<uint64_t>(m_startTime.toDouble() * 1000));
-    m_frameTimer.startRepeating(16_ms);
+    if (!m_frameTimer.isActive())
+        m_frameTimer.startRepeating(16_ms);
 }
 
 void MediaPlayerPrivateVita::startPlayback()
 {
-    if (!m_ready || !m_handle)
+    RefPtr pipeline = m_pipeline;
+    if (!m_ready || !pipeline)
         return;
     m_showingFirstFrame = false;
     m_playbackStarted = MonotonicTime::now();
-    if (!m_started) {
-        m_started = true;
-        sceAvPlayerStart(m_handle);
-        if (m_startTime > MediaTime::zeroTime())
-            sceAvPlayerJumpToTime(m_handle, static_cast<uint64_t>(m_startTime.toDouble() * 1000));
-    } else
-        sceAvPlayerResume(m_handle);
-    if (m_hasAudio && !m_audio) {
-        m_audio = MediaAudioOutput::create(m_handle);
-        applyVolume();
-        m_audio->start();
-    }
-    m_frameTimer.startRepeating(16_ms);
+    pipeline->play();
+    if (m_hasVideo && !m_frameTimer.isActive())
+        m_frameTimer.startRepeating(16_ms);
 }
 
 void MediaPlayerPrivateVita::play()
@@ -758,11 +595,13 @@ void MediaPlayerPrivateVita::play()
         return;
     m_paused = false;
     if (m_ended) {
-        // The library stops at the end: playing again takes a new player.
         m_ended = false;
         m_startTime = MediaTime::zeroTime();
-        destroyPlayer();
-        createPlayer();
+        if (RefPtr pipeline = m_pipeline) {
+            pipeline->seek(0_s);
+            startPlayback();
+        } else
+            createPlayer();
     } else if (m_waitingForPreload)
         loadIfDeferred();
     else if (m_suspended || playersWaitingForLibrary().contains(this))
@@ -779,9 +618,9 @@ void MediaPlayerPrivateVita::pause()
         return;
     m_paused = true;
     m_playRequested = false;
-    if (m_started && m_handle)
-        sceAvPlayerPause(m_handle);
-    m_frameTimer.stop();
+    if (RefPtr pipeline = m_pipeline)
+        pipeline->pause();
+    // The timer stops once a seek in progress shows its frame.
     if (RefPtr player = m_player.get())
         player->playbackStateChanged();
     scheduleLibraryYield();
@@ -798,48 +637,51 @@ MediaTime MediaPlayerPrivateVita::currentTime() const
         return duration();
     if (m_seeking)
         return m_seekTarget;
-    if (!m_started || m_showingFirstFrame || !m_handle)
+    RefPtr pipeline = m_pipeline;
+    if (!pipeline || !m_ready)
         return m_startTime;
-    return MediaTime(sceAvPlayerCurrentTime(m_handle), 1000);
+    auto time = MediaTime::createWithDouble(pipeline->currentTime().seconds());
+    return m_duration.isValid() && m_duration > MediaTime::zeroTime() ? std::min(time, m_duration) : time;
 }
 
 std::optional<VideoPlaybackQualityMetrics> MediaPlayerPrivateVita::videoPlaybackQualityMetrics()
 {
     if (!m_hasVideo)
         return std::nullopt;
+    uint32_t dropped = m_droppedFrames;
+    if (RefPtr pipeline = m_pipeline)
+        dropped += pipeline->droppedFrames();
     VideoPlaybackQualityMetrics metrics;
-    metrics.totalVideoFrames = m_presentedFrames + m_droppedFrames;
-    metrics.droppedVideoFrames = m_droppedFrames;
+    metrics.totalVideoFrames = m_presentedFrames + dropped;
+    metrics.droppedVideoFrames = dropped;
     metrics.displayCompositedVideoFrames = m_presentedFrames;
     return metrics;
 }
 
 void MediaPlayerPrivateVita::seekToTarget(const SeekTarget& target)
 {
-    // Frames after the jump do not follow those before it.
-    m_lastFrameTime = std::nullopt;
-    m_seekTarget = std::clamp(target.time, MediaTime::zeroTime(), duration());
-    if (m_ended || !m_started || !m_handle) {
-        // Starts there.
-        m_startTime = m_seekTarget;
-        if (m_ended) {
-            m_ended = false;
-            destroyPlayer();
-            if (!m_waitingForPreload)
-                createPlayer();
+    m_seekTarget = std::max(target.time, MediaTime::zeroTime());
+    if (m_duration.isValid() && m_duration > MediaTime::zeroTime())
+        m_seekTarget = std::min(m_seekTarget, m_duration);
+    m_seeking = true;
+    m_ended = false;
+    if (RefPtr pipeline = m_pipeline) {
+        // Before Ready too: the pipeline opens the media there.
+        pipeline->seek(Seconds { m_seekTarget.toDouble() });
+        if (m_hasVideo) {
+            if (m_paused)
+                showFirstFrame();
+            else if (!m_frameTimer.isActive())
+                m_frameTimer.startRepeating(16_ms);
         }
-        m_seeking = true;
-        callOnMainThread([weakThis = ThreadSafeWeakPtr { *this }] {
-            if (RefPtr protectedThis = weakThis.get())
-                protectedThis->finishSeek();
-        });
         return;
     }
-    m_seeking = true;
-    m_seekStarted = MonotonicTime::now();
-    sceAvPlayerJumpToTime(m_handle, static_cast<uint64_t>(m_seekTarget.toDouble() * 1000));
-    if (!m_frameTimer.isActive())
-        m_frameTimer.startRepeating(16_ms);
+    // Starts there.
+    m_startTime = m_seekTarget;
+    callOnMainThread([weakThis = ThreadSafeWeakPtr { *this }] {
+        if (RefPtr protectedThis = weakThis.get())
+            protectedThis->finishSeek();
+    });
 }
 
 void MediaPlayerPrivateVita::finishSeek()
@@ -853,64 +695,45 @@ void MediaPlayerPrivateVita::finishSeek()
     }
 }
 
+void MediaPlayerPrivateVita::convertFrame(const VitaVideoFrame& frame)
+{
+    unsigned width = frame.width;
+    unsigned height = frame.height;
+    // Shown at half its size or less, and not read back by a canvas: a quarter
+    // of the pixels to convert and to scale.
+    bool halfSize = !m_paintedSize.isEmpty() && m_paintedSize.width() * 2 <= width && m_paintedSize.height() * 2 <= height
+        && MonotonicTime::now() - m_lastImageRequest > 1_s;
+    unsigned frameWidth = halfSize ? width / 2 : width;
+    unsigned frameHeight = halfSize ? height / 2 : height;
+    if (!m_frame || static_cast<unsigned>(cairo_image_surface_get_width(m_frame.get())) != frameWidth || static_cast<unsigned>(cairo_image_surface_get_height(m_frame.get())) != frameHeight) {
+        m_frame = adoptRef(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, frameWidth, frameHeight));
+        m_frameImage = NativeImage::create(RefPtr { m_frame });
+    }
+    if (halfSize)
+        frame.interleavedChroma ? convertFrameAtHalfSize<true>(frame, m_frame.get()) : convertFrameAtHalfSize<false>(frame, m_frame.get());
+    else
+        frame.interleavedChroma ? WebCore::convertFrame<true>(frame, m_frame.get()) : WebCore::convertFrame<false>(frame, m_frame.get());
+}
+
 void MediaPlayerPrivateVita::updateFrame()
 {
-    if (!m_handle)
+    RefPtr pipeline = m_pipeline;
+    if (!pipeline)
         return;
-    SceAvPlayerFrameInfo frame { };
-    bool newFrame = m_hasVideo && sceAvPlayerGetVideoData(m_handle, &frame) && frame.pData;
+    bool newFrame = m_hasVideo && pipeline->presentFrame([&](const VitaVideoFrame& frame) {
+        convertFrame(frame);
+    });
     if (newFrame) {
-        if (m_lastFrameTime && frame.timeStamp > *m_lastFrameTime) {
-            uint64_t step = frame.timeStamp - *m_lastFrameTime;
-            if (!m_frameInterval || step < m_frameInterval)
-                m_frameInterval = step;
-            m_droppedFrames += (step + m_frameInterval / 2) / m_frameInterval - 1;
-        }
-        m_lastFrameTime = frame.timeStamp;
         ++m_presentedFrames;
-        unsigned width = frame.details.video.width;
-        unsigned height = frame.details.video.height;
-        // Shown at half its size or less, and not read back by a canvas: a
-        // quarter of the pixels to convert and to scale.
-        bool halfSize = !m_paintedSize.isEmpty() && m_paintedSize.width() * 2 <= width && m_paintedSize.height() * 2 <= height
-            && MonotonicTime::now() - m_lastImageRequest > 1_s;
-        unsigned frameWidth = halfSize ? width / 2 : width;
-        unsigned frameHeight = halfSize ? height / 2 : height;
-        if (!m_frame || static_cast<unsigned>(cairo_image_surface_get_width(m_frame.get())) != frameWidth || static_cast<unsigned>(cairo_image_surface_get_height(m_frame.get())) != frameHeight) {
-            m_frame = adoptRef(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, frameWidth, frameHeight));
-            m_frameImage = NativeImage::create(RefPtr { m_frame });
-        }
-        if (halfSize)
-            convertFrameAtHalfSize(frame.pData, width, height, m_frame.get());
-        else
-            convertFrame(frame.pData, width, height, m_frame.get());
         if (RefPtr player = m_player.get())
             player->repaint();
     }
     if (m_showingFirstFrame && (newFrame || MonotonicTime::now() - m_firstFrameStarted > 3_s)) {
         m_showingFirstFrame = false;
-        sceAvPlayerPause(m_handle);
         scheduleLibraryYield();
-    }
-    // The library goes inactive at the end of the media.
-    if (m_started && !m_paused && !m_seeking && !sceAvPlayerIsActive(m_handle)) {
-        reachedEnd();
-        return;
-    }
-    if (m_seeking) {
-        // The jump is done once a frame of the new position shows, or the clock moved.
-        double now = sceAvPlayerCurrentTime(m_handle) / 1000.0;
-        if (newFrame || std::abs(now - m_seekTarget.toDouble()) < 0.5 || MonotonicTime::now() - m_seekStarted > 2_s)
-            finishSeek();
     }
     if (m_paused && !m_seeking && !m_showingFirstFrame)
         m_frameTimer.stop();
-}
-
-void MediaPlayerPrivateVita::isLoopingChanged()
-{
-    if (RefPtr player = m_player.get(); player && m_handle)
-        sceAvPlayerSetLooping(m_handle, player->isLooping());
 }
 
 void MediaPlayerPrivateVita::reachedEnd()
@@ -919,13 +742,14 @@ void MediaPlayerPrivateVita::reachedEnd()
         return;
     m_ended = true;
     RefPtr player = m_player.get();
-    // A looping element seeks back to the start and plays on (when the library did
-    // not loop by itself); reported paused, the element would pause first.
-    if (!player || !player->isLooping())
+    // A looping element seeks back to the start and plays on; reported paused,
+    // the element would pause first.
+    if (!player || !player->isLooping()) {
         m_paused = true;
+        if (RefPtr pipeline = m_pipeline)
+            pipeline->pause();
+    }
     m_frameTimer.stop();
-    if (RefPtr audio = std::exchange(m_audio, nullptr))
-        audio->stop();
     if (player) {
         player->timeChanged();
         player->playbackStateChanged();
@@ -974,8 +798,8 @@ void MediaPlayerPrivateVita::setMuted(bool muted)
 
 void MediaPlayerPrivateVita::applyVolume()
 {
-    if (RefPtr audio = m_audio)
-        audio->setVolume(m_muted ? 0 : m_volume);
+    if (RefPtr pipeline = m_pipeline)
+        pipeline->setVolume(m_muted ? 0 : m_volume);
 }
 
 const PlatformTimeRanges& MediaPlayerPrivateVita::buffered() const

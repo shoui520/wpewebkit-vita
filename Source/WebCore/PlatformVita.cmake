@@ -19,11 +19,14 @@ list(APPEND WebCore_SOURCES
     platform/generic/KeyedEncoderGeneric.cpp
     platform/generic/ScrollbarsControllerGeneric.cpp
     platform/graphics/opentype/OpenTypeVerticalData.cpp
+    platform/graphics/vita/FFmpegDemuxer.cpp
     platform/graphics/vita/GraphicsLayerVita.cpp
     platform/graphics/vita/MediaByteStream.cpp
     platform/graphics/vita/MediaPlayerPrivateVita.cpp
     platform/graphics/vita/MediaPlayerPrivateVitaAudio.cpp
     platform/graphics/vita/SystemFontDatabaseVita.cpp
+    platform/graphics/vita/VitaMediaPipeline.cpp
+    platform/graphics/vita/VitaVideoDecoder.cpp
     platform/network/vita/DNSResolveQueueVita.cpp
     platform/network/vita/NetworkStorageSessionVita.cpp
     platform/network/vita/ResourceModelsVita.cpp

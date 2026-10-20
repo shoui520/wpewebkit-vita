@@ -30,6 +30,7 @@
 #include "MediaPlayerPrivate.h"
 #include "PlatformTimeRanges.h"
 #include "VideoPlaybackQualityMetrics.h"
+#include "VitaMediaPipeline.h"
 #include <wtf/MonotonicTime.h>
 #include <wtf/RunLoop.h>
 #include <wtf/ThreadSafeWeakPtr.h>
@@ -38,15 +39,15 @@ typedef struct _cairo_surface cairo_surface_t;
 
 namespace WebCore {
 
+class AudioTrackPrivate;
 class MediaByteStream;
-class MediaAudioOutput;
 class NativeImage;
-struct PlayerEventTarget;
+class VideoTrackPrivate;
 
-// Plays MP4 files (H.264 video, AAC audio) with the system video player
-// library. The library reads the resource through WebCore's media loader in
-// byte ranges; decoded frames are converted to a Cairo image to paint, and
-// audio goes to a system audio port.
+// Plays video files (MP4, WebM, Ogg...) with a VitaMediaPipeline reading the
+// resource through WebCore's media loader in byte ranges: H.264 decodes on the
+// hardware, other video with FFmpeg. Decoded pictures are converted to a Cairo
+// image to paint, and audio goes to a system audio port.
 class MediaPlayerPrivateVita final
     : public MediaPlayerPrivateInterface
     , public ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr<MediaPlayerPrivateVita, WTF::DestructionThread::Main> {
@@ -62,8 +63,7 @@ public:
     static MediaPlayer::SupportsType supportsType(const MediaEngineSupportParameters&);
     static void getSupportedTypes(HashSet<String>&);
 
-    // A player state event, delivered on the main thread.
-    void playerEvent(int32_t event, unsigned generation);
+    void pipelineEvent(VitaMediaPipeline::Event, unsigned generation);
 
 private:
     constexpr MediaPlayerType mediaPlayerType() const final { return MediaPlayerType::Vita; }
@@ -77,8 +77,6 @@ private:
     void pause() final;
     bool paused() const final { return m_paused; }
     bool ended() const final { return m_ended; }
-    // The library loops looping media by itself.
-    void isLoopingChanged() final;
 
     FloatSize naturalSize() const final { return m_naturalSize; }
     bool hasVideo() const final { return m_hasVideo; }
@@ -123,6 +121,9 @@ private:
     void startPlayback();
     void showFirstFrame();
     void reachedEnd();
+    void convertFrame(const VitaVideoFrame&);
+    void updateTracks();
+    void removeTracks();
     void fail(MediaPlayer::NetworkState, const String& message = { });
     void setNetworkState(MediaPlayer::NetworkState);
     void setReadyState(MediaPlayer::ReadyState);
@@ -136,31 +137,23 @@ private:
     MediaPlayer::NetworkState m_networkState { MediaPlayer::NetworkState::Empty };
     MediaPlayer::ReadyState m_readyState { MediaPlayer::ReadyState::HaveNothing };
 
-    // The library's player; its events carry the generation they belong to.
-    // The system player's handle, 0 when there is none.
-    int m_handle { 0 };
-    // Frames shown, and frames the library decoded that were never fetched,
-    // judged by gaps in the timestamps of those that were.
-    uint32_t m_presentedFrames { 0 };
-    uint32_t m_droppedFrames { 0 };
-    std::optional<uint64_t> m_lastFrameTime;
-    // The smallest step seen between frame timestamps, in milliseconds.
-    uint64_t m_frameInterval { 0 };
+    // The pipeline; its events carry the generation they belong to.
+    RefPtr<VitaMediaPipeline> m_pipeline;
     unsigned m_generation { 0 };
     RefPtr<MediaByteStream> m_stream;
-    std::unique_ptr<PlayerEventTarget> m_eventTarget;
-    RefPtr<MediaAudioOutput> m_audio;
+    // Frames shown, and those dropped by pipelines before this one.
+    uint32_t m_presentedFrames { 0 };
+    uint32_t m_droppedFrames { 0 };
     bool m_waitingForPreload { false };
     // Gave the library up to another player once loaded: a new player resumes at m_startTime.
     bool m_suspended { false };
     // Asked to play before it had data (prepareToPlay()).
     bool m_playRequested { false };
     bool m_ready { false };
-    bool m_started { false };
     bool m_paused { true };
     bool m_ended { false };
     bool m_seeking { false };
-    // Started, to be paused at the first frame so a paused video shows it.
+    // Paused, waiting for the first frame to show.
     bool m_showingFirstFrame { false };
     MonotonicTime m_firstFrameStarted;
     // When playback last started or resumed.
@@ -169,11 +162,13 @@ private:
     // after giving the library up).
     MediaTime m_startTime { MediaTime::zeroTime() };
     MediaTime m_seekTarget;
-    MonotonicTime m_seekStarted;
     MediaTime m_duration { MediaTime::invalidTime() };
     bool m_hasVideo { false };
     bool m_hasAudio { false };
     FloatSize m_naturalSize;
+    // The media's tracks: the controls fade while a video with a video track plays.
+    RefPtr<VideoTrackPrivate> m_videoTrack;
+    RefPtr<AudioTrackPrivate> m_audioTrack;
     float m_volume { 1 };
     bool m_muted { false };
     mutable unsigned long long m_lastReportedBytes { 0 };
